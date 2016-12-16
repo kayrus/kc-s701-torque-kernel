@@ -13,7 +13,9 @@
 #include <net/ip.h>
 #include <linux/genalloc.h>	/* gen_pool_alloc() */
 #include <linux/io.h>
+#include <linux/ratelimit.h>
 #include "ipa_i.h"
+
 static const int ipa_ofst_meq32[] = { IPA_OFFSET_MEQ32_0,
 					IPA_OFFSET_MEQ32_1, -1 };
 static const int ipa_ofst_meq128[] = { IPA_OFFSET_MEQ128_0,
@@ -31,24 +33,6 @@ static const int ep_mapping[IPA_MODE_MAX][IPA_CLIENT_MAX] = {
 	{ 19, -1, -1, -1, -1, 11, 15, 8, 6, 2, 1, 5, 14, 16, 17, 18, -1, 10, 9, 7, 3, 4 },
 	{ 19, -1, -1, -1, -1, 11, 15, 8, 6, 2, 1, 5, 14, 16, 17, 18, -1, 10, 9, 7, 3, 4 },
 };
-
-static unsigned int ipa_calc_pull_len(u32 hdr_len)
-{
-	unsigned int pull_len, padding;
-
-	pull_len = sizeof(struct ipa_a5_mux_hdr);
-
-	/*
-	 * IP packet starts on word boundary
-	 * remove the MUX header and any padding and pass the frame to
-	 * the client which registered a rx callback on the "src pipe"
-	 */
-	padding = hdr_len & 0x3;
-	if (padding)
-		pull_len += 4 - padding;
-
-	return pull_len;
-}
 
 /**
  * ipa_cfg_route() - configure IPA route
@@ -257,6 +241,20 @@ int ipa_generate_hw_rule(enum ipa_ip_type ip,
 			*en_rule |= IPA_TOS_EQ;
 			*buf = ipa_write_8(attrib->u.v4.tos, *buf);
 			*buf = ipa_pad_to_32(*buf);
+		}
+
+		if (attrib->attrib_mask & IPA_FLT_TOS_MASKED) {
+			if (ipa_ofst_meq32[ofst_meq32] == -1) {
+				IPAERR("ran out of meq32 eq\n");
+				return -EPERM;
+			}
+			*en_rule |= ipa_ofst_meq32[ofst_meq32];
+			/* 0 => offset of TOS in v4 header */
+			*buf = ipa_write_8(0, *buf);
+			*buf = ipa_write_32((attrib->tos_mask << 16), *buf);
+			*buf = ipa_write_32(attrib->tos_value, *buf);
+			*buf = ipa_pad_to_32(*buf);
+			ofst_meq32++;
 		}
 
 		if (attrib->attrib_mask & IPA_FLT_PROTOCOL) {
@@ -590,6 +588,20 @@ int ipa_generate_hw_rule(enum ipa_ip_type ip,
 			*buf = ipa_pad_to_32(*buf);
 		}
 
+		if (attrib->attrib_mask & IPA_FLT_TOS_MASKED) {
+			if (ipa_ofst_meq32[ofst_meq32] == -1) {
+				IPAERR("ran out of meq32 eq\n");
+				return -EPERM;
+			}
+			*en_rule |= ipa_ofst_meq32[ofst_meq32];
+			/* 0 => offset of TOS in v4 header */
+			*buf = ipa_write_8(0, *buf);
+			*buf = ipa_write_32((attrib->tos_mask << 20), *buf);
+			*buf = ipa_write_32(attrib->tos_value, *buf);
+			*buf = ipa_pad_to_32(*buf);
+			ofst_meq32++;
+		}
+
 		if (attrib->attrib_mask & IPA_FLT_FLOW_LABEL) {
 			*en_rule |= IPA_FLT_FLOW_LABEL;
 			 /* FIXME FL is only 20 bits */
@@ -776,9 +788,6 @@ int ipa_cfg_ep_hdr(u32 clnt_hdl, const struct ipa_ep_cfg_hdr *ipa_ep_cfg)
 		ipa_write_reg(ipa_ctx->mmio,
 			IPA_ENDP_INIT_HDR_n_OFST_v2(clnt_hdl), val);
 	ipa_dec_client_disable_clks();
-
-	if (IPA_CLIENT_IS_PROD(ep->client))
-		ep->pull_len = ipa_calc_pull_len(ipa_ep_cfg->hdr_len);
 
 	return 0;
 }
@@ -1375,3 +1384,22 @@ int ipa_straddle_boundary(u32 start, u32 end, u32 boundary)
 	else
 		return 0;
 }
+
+/**
+ * ipa_bam_reg_dump() - Dump selected BAM registers for IPA and DMA-BAM
+ *
+ * Function is rate limited to avoid flooding kernel log buffer
+ */
+void ipa_bam_reg_dump(void)
+{
+	static DEFINE_RATELIMIT_STATE(_rs, 500*HZ, 1);
+	if (__ratelimit(&_rs)) {
+		ipa_inc_client_enable_clks();
+		pr_err("IPA BAM START\n");
+		sps_get_bam_debug_info(ipa_ctx->bam_handle, 5, 479182, 0, 0);
+		sps_get_bam_debug_info(ipa_ctx->bam_handle, 93, 0, 0, 0);
+		ipa_dec_client_disable_clks();
+	}
+}
+EXPORT_SYMBOL(ipa_bam_reg_dump);
+

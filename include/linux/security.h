@@ -7,6 +7,9 @@
  * Copyright (C) 2001 James Morris <jmorris@intercode.com.au>
  * Copyright (C) 2001 Silicon Graphics, Inc. (Trust Technology Group)
  *
+ *  This software is contributed or developed by KYOCERA Corporation.
+ *  (C) 2014 KYOCERA Corporation
+ *
  *	This program is free software; you can redistribute it and/or modify
  *	it under the terms of the GNU General Public License as published by
  *	the Free Software Foundation; either version 2 of the License, or
@@ -1514,6 +1517,7 @@ struct security_operations {
 	int (*kernel_act_as)(struct cred *new, u32 secid);
 	int (*kernel_create_files_as)(struct cred *new, struct inode *inode);
 	int (*kernel_module_request)(char *kmod_name);
+	int (*kernel_setup_load_info)(char *kmod_name);
 	int (*task_fix_setuid) (struct cred *new, const struct cred *old,
 				int flags);
 	int (*task_setpgid) (struct task_struct *p, pid_t pgid);
@@ -1775,6 +1779,7 @@ void security_transfer_creds(struct cred *new, const struct cred *old);
 int security_kernel_act_as(struct cred *new, u32 secid);
 int security_kernel_create_files_as(struct cred *new, struct inode *inode);
 int security_kernel_module_request(char *kmod_name);
+int security_kernel_setup_load_info(char *kmod_name);
 int security_task_fix_setuid(struct cred *new, const struct cred *old,
 			     int flags);
 int security_task_setpgid(struct task_struct *p, pid_t pgid);
@@ -2302,6 +2307,11 @@ static inline int security_kernel_create_files_as(struct cred *cred,
 }
 
 static inline int security_kernel_module_request(char *kmod_name)
+{
+	return 0;
+}
+
+static inline int security_kernel_setup_load_info(char *kmod_name)
 {
 	return 0;
 }

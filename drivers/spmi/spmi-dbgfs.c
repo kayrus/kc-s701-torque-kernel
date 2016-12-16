@@ -1,4 +1,4 @@
-/* Copyright (c) 2012, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -24,7 +24,6 @@
  *        /spmi-#
  */
 
-#define DEBUG
 #define pr_fmt(fmt) "%s:%d: " fmt, __func__, __LINE__
 
 #include <linux/kernel.h>
@@ -49,9 +48,9 @@ static const mode_t DFS_MODE = S_IRUSR | S_IWUSR;
 
 /* Log buffer */
 struct spmi_log_buffer {
-	u32  rpos;	/* Current 'read' position in buffer */
-	u32  wpos;	/* Current 'write' position in buffer */
-	u32  len;	/* Length of the buffer */
+	size_t rpos;	/* Current 'read' position in buffer */
+	size_t wpos;	/* Current 'write' position in buffer */
+	size_t len;	/* Length of the buffer */
 	char data[0];	/* Log buffer */
 };
 
@@ -582,12 +581,12 @@ static struct dentry *spmi_dfs_create_fs(void)
 {
 	struct dentry *root, *file;
 
-	pr_debug("Creating SPMI debugfs file-system at\n");
+	pr_debug("Creating SPMI debugfs file-system\n");
 	root = debugfs_create_dir(DFS_ROOT_NAME, NULL);
-	if (IS_ERR(root)) {
+	if (IS_ERR_OR_NULL(root)) {
 		pr_err("Error creating top level directory err:%ld",
 			(long)root);
-		if ((int)root == -ENODEV)
+		if (PTR_ERR(root) == -ENODEV)
 			pr_err("debugfs is not enabled in the kernel");
 		return NULL;
 	}
@@ -694,6 +693,41 @@ err_remove_fs:
 err_create_dir_failed:
 	kfree(ctrl_data);
 	return -ENOMEM;
+}
+
+/*
+ * spmi_dfs_del_controller: deletes spmi controller entry
+ * @return zero on success
+ */
+int spmi_dfs_del_controller(struct spmi_controller *ctrl)
+{
+	int rc;
+	struct list_head *pos, *tmp;
+	struct spmi_ctrl_data *ctrl_data;
+
+	pr_debug("Deleting controller %s\n", ctrl->dev.kobj.name);
+
+	rc = mutex_lock_interruptible(&dbgfs_data.lock);
+	if (rc)
+		return rc;
+
+	list_for_each_safe(pos, tmp, &dbgfs_data.ctrl) {
+		ctrl_data = list_entry(pos, struct spmi_ctrl_data, node);
+
+		if (ctrl_data->ctrl == ctrl) {
+			debugfs_remove_recursive(ctrl_data->dir);
+			list_del(pos);
+			kfree(ctrl_data);
+			rc = 0;
+			goto done;
+		}
+	}
+	rc = -EINVAL;
+	pr_debug("Unknown controller %s\n", ctrl->dev.kobj.name);
+
+done:
+	mutex_unlock(&dbgfs_data.lock);
+	return rc;
 }
 
 /*

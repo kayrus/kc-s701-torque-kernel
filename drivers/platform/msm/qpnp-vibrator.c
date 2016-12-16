@@ -1,3 +1,7 @@
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
+ */
 /* Copyright (c) 2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -35,6 +39,32 @@
 #define QPNP_VIB_VTG_SET_MASK		0x1F
 #define QPNP_VIB_LOGIC_SHIFT		4
 
+#define VIB_HAPTICS_ON  (1)
+#define VIB_HAPTICS_OFF (0)
+
+#define HAPTICS_TIME_10         10  /* 10ms */
+#define HAPTICS_TIME_20         20  /* 20ms */
+#define HAPTICS_TIME_30         30  /* 30ms */
+#define HAPTICS_TIME_40         40  /* 40ms */
+#define HAPTICS_TIME_50         50  /* 50ms */
+#define HAPTICS_TIME_60         60  /* 60ms */
+#define HAPTICS_TIME_70         70  /* 70ms */
+#define HAPTICS_TIME_80         80  /* 80ms */
+#define HAPTICS_TIME_90         90  /* 90ms */
+
+/* log */
+#define DEBUG_VIB_PM8XXX
+#define VIB_LOG(md, fmt, ...) \
+printk(md "[VIB]%s(%d): " fmt, __func__, __LINE__, ## __VA_ARGS__)
+#ifdef DEBUG_VIB_PM8XXX
+#define VIB_DEBUG_LOG(md, fmt, ...) \
+printk(md "[VIB]%s(%d): " fmt, __func__, __LINE__, ## __VA_ARGS__)
+#else
+#define VIB_DEBUG_LOG(md, fmt, ...)
+#endif /* DEBUG_VIB_PM8XXX */
+
+static atomic_t haptics;
+
 struct qpnp_vib {
 	struct spmi_device *spmi;
 	struct hrtimer vib_timer;
@@ -51,6 +81,37 @@ struct qpnp_vib {
 };
 
 static struct qpnp_vib *vib_dev;
+
+#define VIB_TEST
+#ifdef VIB_TEST
+#include <asm/uaccess.h>
+#include <linux/miscdevice.h>
+#include <linux/fs.h>
+#include <linux/ioctl.h>
+
+#define VIB_TEST_IOC_MAGIC 'v'
+#define IOCTL_VIB_TEST_CTRL _IOWR(VIB_TEST_IOC_MAGIC, 1, vib_test_param)
+
+#define VIB_TEST_SET_VOLTAGE 0x0001
+
+#define VIB_TEST_STATUS_SUCCESS (0)
+#define VIB_TEST_STATUS_FAIL    (-1)
+
+typedef struct {
+    u16 req_code;
+	u8 data[4];
+} vib_test_param;
+
+typedef struct {
+    u16 voltage;
+    u8 reserved[2];
+} vib_test_set_voltage_req_data;
+
+typedef struct {
+    u16 status;
+    u8 reserved[2];
+} vib_test_rsp_data;
+#endif /* VIB_TEST */
 
 static int qpnp_vib_read_u8(struct qpnp_vib *vib, u8 *data, u16 reg)
 {
@@ -156,13 +217,49 @@ static int qpnp_vib_set(struct qpnp_vib *vib, int on)
 	return rc;
 }
 
+static int pm8xxx_vib_haptics(int value)
+{
+	if (value > HAPTICS_TIME_10 &&
+	    value <= HAPTICS_TIME_80)
+	{
+		atomic_set(&haptics, VIB_HAPTICS_ON);
+	}
+	else
+	{
+		return value;
+	}
+	if (value > HAPTICS_TIME_10 &&
+	    value <= HAPTICS_TIME_40)
+	{
+		value = value + HAPTICS_TIME_30;
+	}
+	else if (value > HAPTICS_TIME_40 &&
+	         value <= HAPTICS_TIME_60)
+	{
+		value = value + HAPTICS_TIME_20;
+	}
+	else if (value > HAPTICS_TIME_60 &&
+	         value <= HAPTICS_TIME_80)
+	{
+		value = value + HAPTICS_TIME_10;
+	}
+
+	return value;
+}
 static void qpnp_vib_enable(struct timed_output_dev *dev, int value)
 {
 	struct qpnp_vib *vib = container_of(dev, struct qpnp_vib,
 					 timed_dev);
+	if (atomic_read(&haptics) && !(value))
+	{
+		atomic_set(&haptics, VIB_HAPTICS_OFF);
+		return;
+	}
 
 	mutex_lock(&vib->lock);
 	hrtimer_cancel(&vib->vib_timer);
+
+	value = pm8xxx_vib_haptics(value);
 
 	if (value == 0)
 		vib->state = 0;
@@ -208,6 +305,172 @@ static enum hrtimer_restart qpnp_vib_timer_func(struct hrtimer *timer)
 	return HRTIMER_NORESTART;
 }
 
+#ifdef VIB_TEST
+static int vibrator_test_open(struct inode *ip, struct file *fp)
+{
+	VIB_DEBUG_LOG(KERN_INFO, "called.\n");
+	VIB_DEBUG_LOG(KERN_INFO, "end.\n");
+	return 0;
+}
+
+static int vibrator_test_release(struct inode *ip, struct file *fp)
+{
+	VIB_DEBUG_LOG(KERN_INFO, "called.\n");
+	VIB_DEBUG_LOG(KERN_INFO, "end.\n");
+	return 0;
+}
+
+static int vibrator_test_set(int level)
+{
+	u8 val;
+	int ret = 0;
+
+	if (level)
+	{
+		val = vib_dev->reg_vtg_ctl;
+		val &= ~QPNP_VIB_VTG_SET_MASK;
+		val |= (level & QPNP_VIB_VTG_SET_MASK);
+		ret = qpnp_vib_write_u8(vib_dev, &val, QPNP_VIB_VTG_CTL(vib_dev->base));
+		if (ret < 0)
+			return ret;
+		vib_dev->reg_vtg_ctl = val;
+		val = vib_dev->reg_en_ctl;
+		val |= QPNP_VIB_EN;
+		ret = qpnp_vib_write_u8(vib_dev, &val, QPNP_VIB_EN_CTL(vib_dev->base));
+		if (ret < 0)
+			return ret;
+		vib_dev->reg_en_ctl = val;
+	}
+	else
+	{
+		val = vib_dev->reg_en_ctl;
+		val &= ~QPNP_VIB_EN;
+		ret = qpnp_vib_write_u8(vib_dev, &val, QPNP_VIB_EN_CTL(vib_dev->base));
+		if (ret < 0)
+			return ret;
+		vib_dev->reg_en_ctl = val;
+	}
+	return ret;
+}
+static int vibrator_test_set_voltage(u8 *data)
+{
+	int ret = 0;
+	int level=0;
+	vib_test_set_voltage_req_data *req_data =
+	(vib_test_set_voltage_req_data *)data;
+	vib_test_rsp_data *rsp_data = (vib_test_rsp_data *)data;
+	s16 status = VIB_TEST_STATUS_SUCCESS;
+
+	VIB_DEBUG_LOG(KERN_INFO, "called.\n");
+
+	level = req_data->voltage /= 100;
+
+	if (level) {
+		if ((level < QPNP_VIB_MIN_LEVEL) ||
+		    (level > QPNP_VIB_MAX_LEVEL)) {
+			VIB_LOG(KERN_ERR, "Invalid voltage level\n");
+			status = VIB_TEST_STATUS_FAIL;
+		}
+	}
+
+	if (status == VIB_TEST_STATUS_SUCCESS)
+	{
+		ret = vibrator_test_set(level);
+	}
+
+	if (ret < 0) {
+		VIB_LOG(KERN_ERR, "pm8xxx_vibrator_config error.ret=%d\n", ret);
+		status = VIB_TEST_STATUS_FAIL;
+	}
+
+	memset(rsp_data, 0x00, sizeof(vib_test_rsp_data));
+	rsp_data->status = (u32)status;
+
+	VIB_DEBUG_LOG(KERN_INFO, "end. ret=%d\n", ret);
+	return ret;
+}
+
+static long vibrator_test_ioctl
+                        (struct file *file, unsigned int cmd, unsigned long arg)
+{
+	int rc = 0;
+	int ret = 0;
+	u64 ret2 = 0;
+	vib_test_param test_param;
+	VIB_DEBUG_LOG(KERN_INFO, "called. cmd=0x%08X\n", cmd);
+
+	switch (cmd) {
+	case IOCTL_VIB_TEST_CTRL:
+		VIB_DEBUG_LOG(KERN_INFO, "cmd=IOCTL_VIB_TEST_CTRL\n");
+		ret2 = copy_from_user(&test_param, (void *)arg, sizeof(test_param));
+		VIB_DEBUG_LOG(KERN_INFO, "copy_from_user() called. ret2=%lu\n",
+			     (long unsigned int)ret2);
+		VIB_DEBUG_LOG(KERN_INFO,
+		              "copy_from_user() req_code=0x%04X,data=0x%02X%02X%02X%02X\n",
+		              test_param.req_code, test_param.data[0], test_param.data[1],
+			      test_param.data[2], test_param.data[3]);
+	if (ret2) {
+		VIB_LOG(KERN_ERR, "copy_from_user() error. ret2=%lu\n",
+		       (long unsigned int)ret2);
+	rc = -EINVAL;
+		break;
+	}
+	VIB_DEBUG_LOG(KERN_INFO, "req_code=0x%04X\n", test_param.req_code);
+	switch (test_param.req_code) {
+	case VIB_TEST_SET_VOLTAGE:
+		ret = vibrator_test_set_voltage(&test_param.data[0]);
+		if (ret < 0) VIB_LOG(KERN_ERR,
+		                     "vibrator_test_set_voltage() error. ret=%d\n", ret);
+		ret2 = copy_to_user((void *)arg, &test_param, sizeof(vib_test_param));
+		VIB_DEBUG_LOG(KERN_INFO, "copy_to_user() called. ret2=%lu\n",
+			      (long unsigned int)ret2);
+		VIB_DEBUG_LOG(KERN_INFO,
+		              "copy_to_user() req_code=0x%04X,data=0x%02X%02X%02X%02X\n",
+		              test_param.req_code, test_param.data[0], test_param.data[1],
+			      test_param.data[2], test_param.data[3]);
+		if (ret2) {
+			VIB_LOG(KERN_ERR, "copy_to_user() error. ret2=%lu\n",
+			       (long unsigned int)ret2);
+			rc = -EINVAL;
+		}
+		break;
+	default:
+		VIB_LOG(KERN_ERR, "req_code error. req_code=0x%04X\n",
+		        test_param.req_code);
+		rc = -EINVAL;
+		break;
+	}
+	break;
+    default:
+		VIB_LOG(KERN_ERR, "cmd error. cmd=0x%08X\n", cmd);
+		rc = -EINVAL;
+		break;
+	}
+
+	VIB_DEBUG_LOG(KERN_INFO, "end. rc=%d\n", rc);
+	return rc;
+}
+
+static const struct file_operations vibrator_test_fops = {
+	.owner          = THIS_MODULE,
+	.open           = vibrator_test_open,
+	.release        = vibrator_test_release,
+	.unlocked_ioctl = vibrator_test_ioctl,
+};
+
+static struct miscdevice vibrator_test_dev = {
+	.minor = MISC_DYNAMIC_MINOR,
+	.name = "kc_vibrator_test",
+	.fops = &vibrator_test_fops,
+};
+
+void vibrator_test_init(void)
+{
+	misc_register(&vibrator_test_dev);
+}
+#endif /* VIB_TEST */
+
+
 #ifdef CONFIG_PM
 static int qpnp_vibrator_suspend(struct device *dev)
 {
@@ -231,6 +494,8 @@ static int __devinit qpnp_vibrator_probe(struct spmi_device *spmi)
 	int rc;
 	u8 val;
 	u32 temp_val;
+
+	atomic_set(&haptics, VIB_HAPTICS_OFF);
 
 	vib = devm_kzalloc(&spmi->dev, sizeof(*vib), GFP_KERNEL);
 	if (!vib)
@@ -329,6 +594,9 @@ static struct spmi_driver qpnp_vibrator_driver = {
 
 static int __init qpnp_vibrator_init(void)
 {
+#ifdef VIB_TEST
+	vibrator_test_init();
+#endif /* VIB_TEST */
 	return spmi_driver_register(&qpnp_vibrator_driver);
 }
 module_init(qpnp_vibrator_init);

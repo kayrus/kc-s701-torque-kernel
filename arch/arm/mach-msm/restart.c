@@ -10,6 +10,12 @@
  * GNU General Public License for more details.
  *
  */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+* (C) 2012 KYOCERA Corporation
+* (C) 2013 KYOCERA Corporation
+* (C) 2014 KYOCERA Corporation
+ */
 
 #include <linux/module.h>
 #include <linux/moduleparam.h>
@@ -34,12 +40,10 @@
 #include <mach/socinfo.h>
 #include <mach/irqs.h>
 #include <mach/scm.h>
+#include <mach/oem_fact.h>
 #include "msm_watchdog.h"
 #include "timer.h"
 #include "wdog_debug.h"
-#ifdef CONFIG_LGE_HANDLE_PANIC
-#include <mach/lge_handle_panic.h>
-#endif
 
 #define WDT0_RST	0x38
 #define WDT0_EN		0x40
@@ -77,9 +81,15 @@ static void *emergency_dload_mode_addr;
 
 /* Download mode master kill-switch */
 static int dload_set(const char *val, struct kernel_param *kp);
-static int download_mode = 1;
+static int download_mode = 0;
 module_param_call(download_mode, dload_set, param_get_int,
 			&download_mode, 0644);
+static int __init enable_dload_mode( char *str )
+{
+	download_mode = 1;
+	return 1;
+}
+__setup("dload_mode", enable_dload_mode);
 static int panic_prep_restart(struct notifier_block *this,
 			      unsigned long event, void *ptr)
 {
@@ -102,6 +112,11 @@ static void set_dload_mode(int on)
 	}
 }
 
+static bool get_dload_mode(void)
+{
+	return dload_mode_enabled;
+}
+
 static void enable_emergency_dload_mode(void)
 {
 	if (emergency_dload_mode_addr) {
@@ -113,8 +128,18 @@ static void enable_emergency_dload_mode(void)
 		__raw_writel(EMERGENCY_DLOAD_MAGIC3,
 				emergency_dload_mode_addr +
 				(2 * sizeof(unsigned int)));
+
+		/* Need disable the pmic wdt, then the emergency dload mode
+		 * will not auto reset. */
+		qpnp_pon_wd_config(0);
 		mb();
 	}
+}
+
+static bool auth_err_reboot = false;
+void set_auth_error_mode(void)
+{
+  auth_err_reboot = true;
 }
 
 static int dload_set(const char *val, struct kernel_param *kp)
@@ -154,9 +179,18 @@ static bool get_dload_mode(void)
 void msm_set_restart_mode(int mode)
 {
 	restart_mode = mode;
+#ifdef CONFIG_MSM_DLOAD_MODE
+    if (mode == RESTART_DLOAD) {
+       download_mode = mode;
+    }
+#endif
 }
 EXPORT_SYMBOL(msm_set_restart_mode);
 
+extern bool is_vbus_active(void);
+extern bool msm_is_pwroff_mode(void);
+extern void msm_set_pwroff_complete(void);
+extern void diag_end_sequence_output(void);
 static bool scm_pmic_arbiter_disable_supported;
 /*
  * Force the SPMI PMIC arbiter to shutdown so that no more SPMI transactions
@@ -172,8 +206,12 @@ static void halt_spmi_pmic_arbiter(void)
 	}
 }
 
+static int force_restart = 0;
+module_param(force_restart, int, S_IRUGO | S_IWUSR);
 static void __msm_power_off(int lower_pshold)
 {
+	bool pwroff_mode,vbus_monit;
+
 	printk(KERN_CRIT "Powering off the SoC\n");
 #ifdef CONFIG_MSM_DLOAD_MODE
 	set_dload_mode(0);
@@ -181,7 +219,28 @@ static void __msm_power_off(int lower_pshold)
 	pm8xxx_reset_pwr_off(0);
 	qpnp_pon_system_pwr_off(PON_POWER_OFF_SHUTDOWN);
 
+	pwroff_mode = msm_is_pwroff_mode();
+	if (pwroff_mode == true	) {
+		pr_debug("diag_end_sequence_output()\n");
+		diag_end_sequence_output();
+		msm_set_pwroff_complete();
+		for (;;) {
+			vbus_monit = is_vbus_active();
+			if (vbus_monit==false){
+				break;
+			}
+			msleep(100);
+			pr_debug("Wait VBUS OFF!!!\n");
+		}
+	}
+
 	if (lower_pshold) {
+		pr_info("checkpoint: lower pshold. shutdown end\n");
+		if (force_restart) {
+			pr_info("force restart for logging.\n");
+			pm8xxx_reset_pwr_off(1);
+			qpnp_pon_system_pwr_off(PON_POWER_OFF_WARM_RESET);
+		}
 		if (!use_restart_v2()) {
 			__raw_writel(0, PSHOLD_CTL_SU);
 		} else {
@@ -252,11 +311,12 @@ static void msm_restart_prepare(const char *cmd)
 	/* Write download mode flags if we're panic'ing */
 	set_dload_mode(in_panic);
 
-#ifndef CONFIG_LGE_HANDLE_PANIC
 	/* Write download mode flags if restart_mode says so */
 	if (restart_mode == RESTART_DLOAD)
+	{
 		set_dload_mode(1);
-#endif
+		download_mode = 1;
+	}
 
 	/* Kill download mode if master-kill switch is set */
 	if (!download_mode)
@@ -265,45 +325,80 @@ static void msm_restart_prepare(const char *cmd)
 
 	pm8xxx_reset_pwr_off(1);
 
-	qpnp_pon_system_pwr_off(PON_POWER_OFF_WARM_RESET);
+	/* Hard reset the PMIC unless memory contents must be maintained. */
+	if (get_dload_mode() || (cmd != NULL && cmd[0] != '\0'))
+		qpnp_pon_system_pwr_off(PON_POWER_OFF_WARM_RESET);
+	else
+		qpnp_pon_system_pwr_off(PON_POWER_OFF_WARM_RESET);
 
 	if (cmd != NULL) {
 		if (!strncmp(cmd, "bootloader", 10)) {
 			__raw_writel(0x77665500, restart_reason);
 		} else if (!strncmp(cmd, "recovery", 8)) {
 			__raw_writel(0x77665502, restart_reason);
+		} else if (!strcmp(cmd, "rtc")) {
+			__raw_writel(0x77665503, restart_reason);
 		} else if (!strncmp(cmd, "oem-", 4)) {
 			unsigned long code;
 			code = simple_strtoul(cmd + 4, NULL, 16) & 0xff;
+			if ((code != 1) || (auth_err_reboot))
 			__raw_writel(0x6f656d00 | code, restart_reason);
 		} else if (!strncmp(cmd, "edl", 3)) {
 			enable_emergency_dload_mode();
 		} else {
 			__raw_writel(0x77665501, restart_reason);
 		}
-	} else {
-		__raw_writel(0x77665501, restart_reason);
 	}
-#ifdef CONFIG_LGE_HANDLE_PANIC
-	if (restart_mode == RESTART_DLOAD)
-		lge_set_restart_reason(LAF_DLOAD_MODE);
 
-	if (in_panic) {
-		lge_set_panic_reason();
-
-		if (!lge_is_handle_panic_enable())
-			set_dload_mode(0);
-	}
-#endif
 	flush_cache_all();
 	outer_flush_all();
 }
+
+extern void set_smem_crash_system_kernel( void );
+extern void set_smem_crash_system_android( void );
+extern void set_smem_crash_kind_panic( void );
+extern void set_smem_crash_kind_android( void );
+extern void set_smem_crash_kind_kdfs_reboot(void);
+extern void set_kcj_crash_info( void );
+extern void clear_kcj_crash_info( void );
+extern void log_output_console( void );
+extern void set_smem_crash_info_data( const char *pdata );
 
 void msm_restart(char mode, const char *cmd)
 {
 	printk(KERN_NOTICE "Going down for restart now\n");
 
+	if ( cmd != NULL )
+	{
+		if ( strcmp(cmd, "kernel_panic") == 0 )
+		{
+			set_smem_crash_system_kernel();
+			set_smem_crash_kind_panic();
+			set_smem_crash_info_data( " " );
+		}
+		else if ( strcmp(cmd, "android_system_crash") == 0 )
+		{
+			set_smem_crash_system_android();
+			set_smem_crash_kind_android();
+			set_smem_crash_info_data( " " );
+			in_panic = 1;
+		}
+		else if (strcmp(cmd, "kdfs_reboot") == 0 )
+		{
+			set_smem_crash_system_android();
+			set_smem_crash_kind_kdfs_reboot();
+			set_smem_crash_info_data( " " );
+		}
+		else if ( strcmp(cmd, "dload") == 0 )
+		{
+			clear_kcj_crash_info();
+		}
+	}
+	set_kcj_crash_info();
+
 	msm_restart_prepare(cmd);
+
+	log_output_console();
 
 	if (!use_restart_v2()) {
 		__raw_writel(0, msm_tmr0_base + WDT0_EN);
@@ -360,20 +455,13 @@ static int __init msm_restart_init(void)
 	dload_mode_addr = MSM_IMEM_BASE + DLOAD_MODE_ADDR;
 	emergency_dload_mode_addr = MSM_IMEM_BASE +
 		EMERGENCY_DLOAD_MODE_ADDR;
+       download_mode = oem_fact_get_option_bit(OEM_FACT_OPTION_ITEM_02, 0x00);
 	set_dload_mode(download_mode);
 #endif
 	msm_tmr0_base = msm_timer_get_timer0_base();
 	restart_reason = MSM_IMEM_BASE + RESTART_REASON_ADDR;
 	pm_power_off = msm_power_off;
 
-#ifdef CONFIG_LGE_HANDLE_PANIC
-	/* Set default restart_reason to TZ crash.
-	 * If can't be set explicit, it causes by TZ */
-	__raw_writel(LGE_RB_MAGIC | LGE_ERR_TZ, restart_reason);
-
-	if (!lge_is_handle_panic_enable())
-		set_dload_mode(0);
-#endif
 	if (scm_is_call_available(SCM_SVC_PWR, SCM_IO_DISABLE_PMIC_ARBITER) > 0)
 		scm_pmic_arbiter_disable_supported = true;
 

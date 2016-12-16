@@ -17,6 +17,12 @@
  * Author:  Andrew Christian
  *          28 May 2002
  */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
+ * (C) 2015 KYOCERA Corporation
+ */
+
 #include <linux/moduleparam.h>
 #include <linux/module.h>
 #include <linux/init.h>
@@ -588,6 +594,7 @@ static int mmc_blk_ioctl_cmd(struct block_device *bdev,
 	struct mmc_request mrq = {NULL};
 	struct scatterlist sg;
 	int err;
+	int err1;
 
 	/*
 	 * The caller must have CAP_SYS_RAWIO, and must be calling this on the
@@ -668,6 +675,11 @@ static int mmc_blk_ioctl_cmd(struct block_device *bdev,
 			goto cmd_rel_host;
 	}
 
+	if ( cmd.arg == 0x03a50101 && card->cid.manfid == 0x11)
+	{
+		pr_notice("%s: mmc_sanitize_start\n", mmc_hostname(card->host));
+	}
+
 	mmc_wait_for_req(card->host, &mrq);
 
 	if (cmd.error) {
@@ -681,6 +693,17 @@ static int mmc_blk_ioctl_cmd(struct block_device *bdev,
 						__func__, data.error);
 		err = data.error;
 		goto cmd_rel_host;
+	}
+
+	if ( cmd.arg == 0x03a50101 && card->cid.manfid == 0x11)
+	{
+		pr_notice("%s: mmc_sanitize_end_hpi_start\n", mmc_hostname(card->host));
+		msleep(50);
+		err1 = mmc_interrupt_hpi(card);
+		pr_notice("%s: mmc_sanitize_hpi_end\n", mmc_hostname(card->host));
+		if (err1){
+			pr_err("%s: mmc_interrupt_hpi() failed (%d)\n", mmc_hostname(card->host), err);
+		}
 	}
 
 	/*
@@ -1384,15 +1407,25 @@ out:
 static int mmc_blk_issue_flush(struct mmc_queue *mq, struct request *req)
 {
 	struct mmc_blk_data *md = mq->data;
+	struct request_queue *q = mq->queue;
 	struct mmc_card *card = md->queue.card;
 	int ret = 0;
 
 	ret = mmc_flush_cache(card);
-	if (ret)
+	if (ret == -ETIMEDOUT) {
+		pr_info("%s: requeue flush request after timeout", __func__);
+		spin_lock_irq(q->queue_lock);
+		blk_requeue_request(q, req);
+		spin_unlock_irq(q->queue_lock);
+		ret = 0;
+		goto exit;
+	} else if (ret) {
+		pr_err("%s: notify flush error to upper layers", __func__);
 		ret = -EIO;
+	}
 
 	blk_end_request_all(req, ret);
-
+exit:
 	return ret ? 0 : 1;
 }
 
@@ -1479,6 +1512,7 @@ static int mmc_blk_err_check(struct mmc_card *card,
 	if (!mmc_host_is_spi(card->host) && rq_data_dir(req) != READ) {
 		u32 status;
 		unsigned long timeout;
+		u32 stop_status;
 
 		timeout = jiffies + msecs_to_jiffies(MMC_BLK_TIMEOUT_MS);
 		do {
@@ -1487,6 +1521,15 @@ static int mmc_blk_err_check(struct mmc_card *card,
 				pr_err("%s: error %d requesting status\n",
 				       req->rq_disk->disk_name, err);
 				return MMC_BLK_CMD_ERR;
+			}
+			
+			if ((R1_CURRENT_STATE(status) == R1_STATE_RCV) &&
+				(status & R1_WP_VIOLATION)) {
+				pr_notice("%s: R1_WP_VIOLATION has occurred, eMMC current status (0x%x)\n",__func__, status);
+
+				err = send_stop(card, &stop_status);
+				if (err)
+					pr_err("%s: general error sending stop command\n",__func__);
 			}
 
 			/* Timeout if the device never becomes ready for data
@@ -1505,7 +1548,8 @@ static int mmc_blk_err_check(struct mmc_card *card,
 			 * indication and the card state.
 			 */
 		} while (!(status & R1_READY_FOR_DATA) ||
-			 (R1_CURRENT_STATE(status) == R1_STATE_PRG));
+			 (R1_CURRENT_STATE(status) == R1_STATE_PRG) ||
+			 ((R1_CURRENT_STATE(status) == R1_STATE_RCV) && (status & R1_WP_VIOLATION)));
 	}
 
 	if (brq->data.error) {
@@ -1639,6 +1683,13 @@ static int mmc_blk_update_interrupted_req(struct mmc_card *card,
 		 ext_csd[EXT_CSD_CORRECTLY_PRG_SECTORS_NUM + 1] << 8 |
 		 ext_csd[EXT_CSD_CORRECTLY_PRG_SECTORS_NUM + 2] << 16 |
 		 ext_csd[EXT_CSD_CORRECTLY_PRG_SECTORS_NUM + 3] << 24);
+
+	/*
+	 * skip packed command header (1 sector) included by the counter but not
+	 * actually written to the NAND
+	 */
+	if (correctly_done >= card->ext_csd.data_sector_size)
+		correctly_done -= card->ext_csd.data_sector_size;
 
 	list_for_each_entry(prq, &mq_rq->packed_list, queuelist) {
 		if ((correctly_done - (int)blk_rq_bytes(prq)) < 0) {
@@ -2783,8 +2834,11 @@ static struct mmc_blk_data *mmc_blk_alloc_req(struct mmc_card *card,
  err_putdisk:
 	put_disk(md->disk);
  err_kfree:
+	if (!subname)
+		__clear_bit(md->name_idx, name_use);
 	kfree(md);
  out:
+	__clear_bit(devidx, dev_use);
 	return ERR_PTR(ret);
 }
 
@@ -2993,11 +3047,6 @@ force_ro_fail:
 	return ret;
 }
 
-#define CID_MANFID_SANDISK	0x2
-#define CID_MANFID_TOSHIBA	0x11
-#define CID_MANFID_MICRON	0x13
-#define CID_MANFID_SAMSUNG	0x15
-
 static const struct mmc_fixup blk_fixups[] =
 {
 	MMC_FIXUP("SEM02G", CID_MANFID_SANDISK, 0x100, add_quirk,
@@ -3058,6 +3107,8 @@ static const struct mmc_fixup blk_fixups[] =
 		  MMC_QUIRK_SEC_ERASE_TRIM_BROKEN),
 	MMC_FIXUP("VZL00M", CID_MANFID_SAMSUNG, CID_OEMID_ANY, add_quirk_mmc,
 		  MMC_QUIRK_SEC_ERASE_TRIM_BROKEN),
+	MMC_FIXUP(CID_NAME_ANY, CID_MANFID_HYNIX, CID_OEMID_ANY, add_quirk_mmc,
+		  MMC_QUIRK_BROKEN_DATA_TIMEOUT),
 
 	END_FIXUP
 };
@@ -3079,7 +3130,7 @@ static int mmc_blk_probe(struct mmc_card *card)
 
 	string_get_size((u64)get_capacity(md->disk) << 9, STRING_UNITS_2,
 			cap_str, sizeof(cap_str));
-	pr_info("%s: %s %s %s %s\n",
+	 pr_notice("%s: %s %s %s %s\n",
 		md->disk->disk_name, mmc_card_id(card), mmc_card_name(card),
 		cap_str, md->read_only ? "(ro)" : "");
 
@@ -3143,6 +3194,9 @@ static void mmc_blk_shutdown(struct mmc_card *card)
 	/* send power off notification */
 	if (mmc_card_mmc(card)) {
 		mmc_rpm_hold(card->host, &card->dev);
+		mmc_claim_host(card->host);
+		mmc_stop_bkops(card);
+		mmc_release_host(card->host);
 		mmc_send_long_pon(card);
 		mmc_rpm_release(card->host, &card->dev);
 	}

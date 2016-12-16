@@ -9,6 +9,10 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
+ */
 
 #include <linux/delay.h>
 #include <linux/clk.h>
@@ -32,6 +36,9 @@
 #include "msm_isp32.h"
 
 static struct msm_sd_req_vb2_q vfe_vb2_ops;
+struct workqueue_struct *frame_wq;
+struct work_struct cam_frame_mon_work;
+
 
 static const struct of_device_id msm_vfe_dt_match[] = {
 	{
@@ -103,6 +110,12 @@ static int __devinit vfe_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
+    frame_wq = create_singlethread_workqueue("frame_wq");
+    if(frame_wq)
+    {
+        INIT_WORK(&cam_frame_mon_work, msm_frame_monitoring);
+    }
+
 	INIT_LIST_HEAD(&vfe_dev->tasklet_q);
 	tasklet_init(&vfe_dev->vfe_tasklet,
 		msm_isp_do_tasklet, (unsigned long)vfe_dev);
@@ -140,6 +153,7 @@ static int __devinit vfe_probe(struct platform_device *pdev)
 		&vfe_vb2_ops, &vfe_layout);
 	if (rc < 0) {
 		pr_err("%s: Unable to create buffer manager\n", __func__);
+		msm_sd_unregister(&vfe_dev->subdev);
 		kfree(vfe_dev);
 		return -EINVAL;
 	}

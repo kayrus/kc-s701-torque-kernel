@@ -3,6 +3,11 @@
  *
  *  Copyright (C) 1991, 1992  Linus Torvalds
  */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2013 KYOCERA Corporation
+ * (C) 2014 KYOCERA Corporation
+ */
 
 #include <linux/export.h>
 #include <linux/mm.h>
@@ -418,6 +423,8 @@ EXPORT_SYMBOL_GPL(kernel_power_off);
 
 static DEFINE_MUTEX(reboot_mutex);
 
+extern void clear_kcj_crash_info( void );
+
 /*
  * Reboot system call: for obvious reasons only root may call it,
  * and even root needs to set up some magic numbers in the registers
@@ -431,6 +438,8 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 {
 	char buffer[256];
 	int ret = 0;
+
+	pr_info("checkpoint: sys_reboot begin cmd=0x%x\n", cmd);
 
 	/* We only trust the superuser with rebooting the system. */
 	if (!capable(CAP_SYS_BOOT))
@@ -462,6 +471,7 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 	mutex_lock(&reboot_mutex);
 	switch (cmd) {
 	case LINUX_REBOOT_CMD_RESTART:
+		clear_kcj_crash_info();
 		kernel_restart(NULL);
 		break;
 
@@ -479,6 +489,7 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 		panic("cannot halt");
 
 	case LINUX_REBOOT_CMD_POWER_OFF:
+		clear_kcj_crash_info();
 		kernel_power_off();
 		do_exit(0);
 		break;
@@ -490,6 +501,7 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 		}
 		buffer[sizeof(buffer) - 1] = '\0';
 
+		clear_kcj_crash_info();
 		kernel_restart(buffer);
 		break;
 

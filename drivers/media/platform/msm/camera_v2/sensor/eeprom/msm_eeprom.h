@@ -45,5 +45,4 @@ struct msm_eeprom_ctrl_t {
 	uint32_t subdev_id;
 };
 
-int32_t msm_eeprom_read(void);
 #endif

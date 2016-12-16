@@ -1,4 +1,9 @@
 /*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
+ */
+
+/*
  * Driver model for leds and led triggers
  *
  * Copyright (C) 2005 John Lenz <lenz@cs.wisc.edu>
@@ -74,6 +79,12 @@ struct led_classdev {
 	struct list_head	 trig_list;
 	void			*trigger_data;
 #endif
+
+	void	(*control_ex)(struct led_classdev *led_cdev,
+						unsigned long onoff,
+						unsigned long priority,
+						unsigned long mode,
+						unsigned long *pattern);
 };
 
 extern int led_classdev_register(struct device *parent,
@@ -209,5 +220,48 @@ struct gpio_led_platform_data {
 
 struct platform_device *gpio_led_register_device(
 		int id, const struct gpio_led_platform_data *pdata);
+
+
+
+enum led_select {
+	LED_SEL_INVALID = 0,
+	LED_SEL_KEYBL = 1,
+	LED_SEL_GREEN = 2,
+	LED_SEL_RED = 3,
+	LED_SEL_AMBER = 4,
+};
+
+#define	LED_NAME_KEYBL			"button-backlight"
+#define	LED_NAME_RED			"red"
+#define	LED_NAME_GREEN			"green"
+#define	LED_NAME_AMBER			"amber"
+
+#define LED_COLOR_OFF		0
+#define LED_COLOR_BLUE		1
+#define LED_COLOR_GREEN		2
+#define LED_COLOR_RED		4
+#define LED_COLOR_AMBER		(LED_COLOR_GREEN | LED_COLOR_RED)
+
+#define LED_BLINK_ON		1
+#define LED_BLINK_OFF		0
+
+#define LED_PRIORITY_BT_INCOMING	0
+#define LED_PRIORITY_INCOMING		1
+#define LED_PRIORITY_DATAROAMGUARD	2
+#define LED_PRIORITY_NOTIFICATION	3
+#define LED_PRIORITY_BATTERY		4
+#define LED_PRIORITY_NUMBER			5	/* number of priorities */
+
+#define LED_CTRL_MAX_SEQUENCE		10
+
+struct led_control_ex_data {
+	uint32_t	priority;
+	uint32_t	color;
+	uint32_t	mode;
+	uint32_t	pattern[LED_CTRL_MAX_SEQUENCE];
+};
+
+extern void qpnp_set_leddata_ex(struct led_control_ex_data *);
+
 
 #endif		/* __LINUX_LEDS_H_INCLUDED */

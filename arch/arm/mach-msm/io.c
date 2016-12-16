@@ -16,6 +16,10 @@
  * GNU General Public License for more details.
  *
  */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
+ */
 
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -46,15 +50,28 @@
  * and should work as-is for any target without stacked memory.
  */
 phys_addr_t msm_shared_ram_phys = 0x00100000;
+unsigned int msm_uninit_ram_phys = 0x07600000;
 
 static void __init msm_map_io(struct map_desc *io_desc, int size)
 {
 	int i;
 
 	BUG_ON(!size);
+#if 0
 	for (i = 0; i < size; i++)
 		if (io_desc[i].virtual == (unsigned long)MSM_SHARED_RAM_BASE)
 			io_desc[i].pfn = __phys_to_pfn(msm_shared_ram_phys);
+#else
+	for (i = 0; i < size; i++) {
+		if (io_desc[i].virtual == (unsigned long)MSM_SHARED_RAM_BASE) {
+			io_desc[i].pfn = __phys_to_pfn(msm_shared_ram_phys);
+			printk( KERN_INFO "SHARED:virt=0x%08lx, pfn=%d\n", (unsigned long)io_desc[i].virtual, (int)io_desc[i].pfn );
+		} else if (io_desc[i].virtual == (unsigned long)MSM_UNINIT_RAM_BASE) {
+			io_desc[i].pfn = __phys_to_pfn(msm_uninit_ram_phys);
+			printk( KERN_INFO "UNINIT:virt=0x%08lx, pfn=%d\n", (unsigned long)io_desc[i].virtual, (int)io_desc[i].pfn );
+		}
+	}
+#endif
 
 	iotable_init(io_desc, size);
 }
@@ -299,6 +316,7 @@ void __init msm_map_apq8064_io(void)
 #ifdef CONFIG_ARCH_MSM8974
 static struct map_desc msm_8974_io_desc[] __initdata = {
 	MSM_CHIP_DEVICE(QGIC_DIST, MSM8974),
+	MSM_CHIP_DEVICE(QGIC_CPU, MSM8974),
 	MSM_CHIP_DEVICE(TLMM, MSM8974),
 	MSM_CHIP_DEVICE(MPM2_PSHOLD, MSM8974),
 	{
@@ -322,6 +340,7 @@ void __init msm_map_8974_io(void)
 #ifdef CONFIG_ARCH_APQ8084
 static struct map_desc msm_8084_io_desc[] __initdata = {
 	MSM_CHIP_DEVICE(QGIC_DIST, APQ8084),
+	MSM_CHIP_DEVICE(QGIC_CPU, APQ8084),
 	MSM_CHIP_DEVICE(TLMM, APQ8084),
 	{
 		.virtual =  (unsigned long) MSM_SHARED_RAM_BASE,
@@ -504,6 +523,7 @@ void __init msm_map_msm8625_io(void) { return; }
 #ifdef CONFIG_ARCH_MSM9625
 static struct map_desc msm9625_io_desc[] __initdata = {
 	MSM_CHIP_DEVICE(QGIC_DIST, MSM9625),
+	MSM_CHIP_DEVICE(QGIC_CPU, MSM9625),
 	MSM_CHIP_DEVICE(TLMM, MSM9625),
 	MSM_CHIP_DEVICE(MPM2_PSHOLD, MSM9625),
 	MSM_CHIP_DEVICE(TMR, MSM9625),
@@ -547,6 +567,7 @@ void __init msm_map_msmkrypton_io(void)
 #ifdef CONFIG_ARCH_MPQ8092
 static struct map_desc mpq8092_io_desc[] __initdata = {
 	MSM_CHIP_DEVICE(QGIC_DIST, MPQ8092),
+	MSM_CHIP_DEVICE(QGIC_CPU, MPQ8092),
 	MSM_CHIP_DEVICE(TLMM, MPQ8092),
 	{
 		.virtual =  (unsigned long) MSM_SHARED_RAM_BASE,
@@ -569,12 +590,18 @@ void __init msm_map_mpq8092_io(void)
 #ifdef CONFIG_ARCH_MSM8226
 static struct map_desc msm_8226_io_desc[] __initdata = {
 	MSM_CHIP_DEVICE(QGIC_DIST, MSM8226),
+	MSM_CHIP_DEVICE(QGIC_CPU, MSM8226),
 	MSM_CHIP_DEVICE(APCS_GCC, MSM8226),
 	MSM_CHIP_DEVICE(TLMM, MSM8226),
 	MSM_CHIP_DEVICE(MPM2_PSHOLD, MSM8226),
 	{
 		.virtual =  (unsigned long) MSM_SHARED_RAM_BASE,
 		.length =   MSM_SHARED_RAM_SIZE,
+		.type =     MT_DEVICE,
+	},
+	{
+		.virtual =  (unsigned long) MSM_UNINIT_RAM_BASE,
+		.length =   MSM_UNINIT_RAM_SIZE,
 		.type =     MT_DEVICE,
 	},
 #ifdef CONFIG_DEBUG_MSM8226_UART
@@ -594,6 +621,7 @@ void __init msm_map_msm8226_io(void)
 #ifdef CONFIG_ARCH_MSM8610
 static struct map_desc msm8610_io_desc[] __initdata = {
 	MSM_CHIP_DEVICE(QGIC_DIST, MSM8610),
+	MSM_CHIP_DEVICE(QGIC_CPU, MSM8610),
 	MSM_CHIP_DEVICE(APCS_GCC, MSM8610),
 	MSM_CHIP_DEVICE(TLMM, MSM8610),
 	MSM_CHIP_DEVICE(MPM2_PSHOLD, MSM8610),

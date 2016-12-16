@@ -1,3 +1,5 @@
+# This software is contributed or developed by KYOCERA Corporation.
+# (C) 2014 KYOCERA Corporation
 #
 # Makefile for the Linux kernel device drivers.
 #
@@ -144,3 +146,8 @@ obj-$(CONFIG_MOBICORE_SUPPORT)  += gud/
 obj-$(CONFIG_CORESIGHT)		+= coresight/
 
 obj-$(CONFIG_BIF)		+= bif/
+
+obj-y				+= sensors/
+
+obj-y				+= dnand/
+

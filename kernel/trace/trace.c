@@ -11,6 +11,10 @@
  *  Copyright (C) 2004-2006 Ingo Molnar
  *  Copyright (C) 2004 William Lee Irwin III
  */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
+ */
 #include <linux/ring_buffer.h>
 #include <generated/utsrelease.h>
 #include <linux/stacktrace.h>
@@ -966,7 +970,7 @@ void tracing_reset_current_online_cpus(void)
 	tracing_reset_online_cpus(&global_trace);
 }
 
-#define SAVED_CMDLINES 128
+#define SAVED_CMDLINES 1024
 #define NO_CMDLINE_MAP UINT_MAX
 static unsigned map_pid_to_cmdline[PID_MAX_DEFAULT+1];
 static unsigned map_cmdline_to_pid[SAVED_CMDLINES];

@@ -3,6 +3,8 @@
  *
  * Copyright (C) 2010 Google, Inc.
  * Author: Mike Lockwood <lockwood@android.com>
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB.
+ * Copyright (C) 2012 Sony Mobile Communications AB.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -13,6 +15,13 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
+ */
+
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2012 KYOCERA Corporation
+ * (C) 2013 KYOCERA Corporation
+ * (C) 2014 KYOCERA Corporation
  */
 
 /* #define DEBUG */
@@ -35,6 +44,8 @@
 #include <linux/usb_usual.h>
 #include <linux/usb/ch9.h>
 #include <linux/usb/f_mtp.h>
+
+#include <linux/switch.h>
 
 #define MTP_BULK_BUFFER_SIZE       16384
 #define INTR_BUFFER_SIZE           28
@@ -109,6 +120,7 @@ struct mtp_dev {
 	struct workqueue_struct *wq;
 	struct work_struct send_file_work;
 	struct work_struct receive_file_work;
+	struct work_struct vendor_req_work;
 	struct file *xfer_file;
 	loff_t xfer_file_offset;
 	int64_t xfer_file_length;
@@ -116,6 +128,11 @@ struct mtp_dev {
 	uint16_t xfer_command;
 	uint32_t xfer_transaction_id;
 	int xfer_result;
+
+	/* vendor_req (1 char), vendor_data (20 chars) */
+	unsigned char vendor_req[1 + 20];
+	struct switch_dev	*sdev;
+	uint32_t vendor_req_no;
 };
 
 static struct usb_interface_descriptor mtp_interface_desc = {
@@ -151,7 +168,7 @@ static struct usb_ss_ep_comp_descriptor mtp_superspeed_in_comp_desc = {
 	.bDescriptorType =	USB_DT_SS_ENDPOINT_COMP,
 
 	/* the following 2 values can be tweaked if necessary */
-	/* .bMaxBurst =		0, */
+	.bMaxBurst =		2,
 	/* .bmAttributes =	0, */
 };
 
@@ -168,7 +185,7 @@ static struct usb_ss_ep_comp_descriptor mtp_superspeed_out_comp_desc = {
 	.bDescriptorType =	USB_DT_SS_ENDPOINT_COMP,
 
 	/* the following 2 values can be tweaked if necessary */
-	/* .bMaxBurst =		0, */
+	 .bMaxBurst =		2,
 	/* .bmAttributes =	0, */
 };
 
@@ -321,23 +338,6 @@ struct mtp_ext_config_desc_function {
 	__u8	reserved[6];
 };
 
-/* MTP Extended Configuration Descriptor */
-struct {
-	struct mtp_ext_config_desc_header	header;
-	struct mtp_ext_config_desc_function    function;
-} mtp_ext_config_desc = {
-	.header = {
-		.dwLength = __constant_cpu_to_le32(sizeof(mtp_ext_config_desc)),
-		.bcdVersion = __constant_cpu_to_le16(0x0100),
-		.wIndex = __constant_cpu_to_le16(4),
-		.bCount = __constant_cpu_to_le16(1),
-	},
-	.function = {
-		.bFirstInterfaceNumber = 0,
-		.bInterfaceCount = 1,
-		.compatibleID = { 'M', 'T', 'P' },
-	},
-};
 
 struct mtp_device_status {
 	__le16	wLength;
@@ -425,7 +425,8 @@ static void mtp_complete_in(struct usb_ep *ep, struct usb_request *req)
 	struct mtp_dev *dev = _mtp_dev;
 
 	if (req->status != 0)
-		dev->state = STATE_ERROR;
+		if (dev->state != STATE_OFFLINE)
+			dev->state = STATE_ERROR;
 
 	mtp_req_put(dev, &dev->tx_idle, req);
 
@@ -438,7 +439,8 @@ static void mtp_complete_out(struct usb_ep *ep, struct usb_request *req)
 
 	dev->rx_done = 1;
 	if (req->status != 0)
-		dev->state = STATE_ERROR;
+		if (dev->state != STATE_OFFLINE)
+			dev->state = STATE_ERROR;
 
 	wake_up(&dev->read_wq);
 }
@@ -448,11 +450,37 @@ static void mtp_complete_intr(struct usb_ep *ep, struct usb_request *req)
 	struct mtp_dev *dev = _mtp_dev;
 
 	if (req->status != 0)
-		dev->state = STATE_ERROR;
+		if (dev->state != STATE_OFFLINE)
+			dev->state = STATE_ERROR;
 
 	mtp_req_put(dev, &dev->intr_idle, req);
 
 	wake_up(&dev->intr_wq);
+}
+
+static void mtp_complete_req_out(struct usb_ep *ep, struct usb_request *req)
+{
+        struct mtp_dev *dev = ep->driver_data;
+
+	req->complete = NULL;
+
+	if (!strncmp(req->buf, &dev->vendor_req[1], 19)) {
+		dev->vendor_req_no = 1;
+		queue_work(dev->wq, &dev->vendor_req_work);
+	} else {
+		printk(KERN_INFO "mtp request error\n");
+	}
+}
+
+static void vendor_req_work(struct work_struct *data)
+{
+	struct mtp_dev *dev = _mtp_dev;
+
+	if (dev->vendor_req_no == 1) {
+		switch_set_state(dev->sdev, 0);
+		switch_set_state(dev->sdev, 2);
+		dev->vendor_req_no = 0;
+	}
 }
 
 static int mtp_create_bulk_endpoints(struct mtp_dev *dev,
@@ -694,8 +722,8 @@ static ssize_t mtp_write(struct file *fp, const char __user *buf,
 			break;
 		}
 
-		if (count > MTP_BULK_BUFFER_SIZE)
-			xfer = MTP_BULK_BUFFER_SIZE;
+		if (count > mtp_tx_req_len)
+			xfer = mtp_tx_req_len;
 		else
 			xfer = count;
 		if (xfer && copy_from_user(req->buf, buf, xfer)) {
@@ -787,8 +815,8 @@ static void send_file_work(struct work_struct *data)
 			break;
 		}
 
-		if (count > MTP_BULK_BUFFER_SIZE)
-			xfer = MTP_BULK_BUFFER_SIZE;
+		if (count > mtp_tx_req_len)
+			xfer = mtp_tx_req_len;
 		else
 			xfer = count;
 
@@ -829,6 +857,9 @@ static void send_file_work(struct work_struct *data)
 
 	if (req)
 		mtp_req_put(dev, &dev->tx_idle, req);
+
+	if (dev->state == STATE_OFFLINE)
+		r = -EIO;
 
 	DBG(cdev, "send_file_work returning %d\n", r);
 	/* write the result */
@@ -899,7 +930,10 @@ static void receive_file_work(struct work_struct *data)
 				dev->rx_done || dev->state != STATE_BUSY);
 			if (dev->state == STATE_CANCELED
 					|| dev->state == STATE_OFFLINE) {
-				r = -ECANCELED;
+				if (dev->state == STATE_OFFLINE)
+					r = -EIO;
+				else
+					r = -ECANCELED;
 				if (!dev->rx_done)
 					usb_ep_dequeue(dev->ep_out, read_req);
 				break;
@@ -926,6 +960,9 @@ static void receive_file_work(struct work_struct *data)
 			read_req = NULL;
 		}
 	}
+
+	if (dev->state == STATE_OFFLINE)
+		r = -EIO;
 
 	DBG(cdev, "receive_file_work returning %d\n", r);
 	/* write the result */
@@ -1134,12 +1171,59 @@ static int mtp_ctrlrequest(struct usb_composite_dev *cdev,
 		DBG(cdev, "vendor request: %d index: %d value: %d length: %d\n",
 			ctrl->bRequest, w_index, w_value, w_length);
 
-		if (ctrl->bRequest == 1
-				&& (ctrl->bRequestType & USB_DIR_IN)
-				&& (w_index == 4 || w_index == 5)) {
-			value = (w_length < sizeof(mtp_ext_config_desc) ?
-					w_length : sizeof(mtp_ext_config_desc));
-			memcpy(cdev->req->buf, &mtp_ext_config_desc, value);
+		if((ctrl->bRequest == 1) &&
+				(ctrl->bRequestType & USB_DIR_IN) && (w_index == 4)) {
+			int total = 0;
+			int func_num = 0;
+			int interface_num = 0;
+			struct mtp_ext_config_desc_header *head;
+			struct mtp_ext_config_desc_function *func;
+			struct usb_configuration *cfg;
+			struct usb_function *f;
+
+			head = (struct mtp_ext_config_desc_header *)
+				cdev->req->buf;
+			func = (struct mtp_ext_config_desc_function *)
+				(head + 1);
+
+			/* zero clear */
+			memset(cdev->req->buf, 0x00, cdev->bufsiz);
+
+			list_for_each_entry(cfg, &cdev->configs, list) {
+
+				list_for_each_entry(f, &cfg->functions, list) {
+					if (!f)
+						break;
+
+					interface_num++;
+					func->bFirstInterfaceNumber = func_num;
+					func->bInterfaceCount = 1;
+					if (!strncmp(f->name, "mtp", 3)) {
+						memcpy(func->compatibleID,
+								"MTP", 3);
+						VDBG(cdev,
+								"MTP interface found."
+								"Interface_num: %d.\n",
+								interface_num);
+					}
+					func++;
+					func_num++;
+				}
+			}
+
+			total = sizeof(*head) + (sizeof(*func) * func_num);
+
+			/* header section */
+			head->dwLength = total;
+			head->bcdVersion = __constant_cpu_to_le16(0x0100);
+			head->wIndex = __constant_cpu_to_le16(4);
+			head->bCount = func_num;
+			value = min(w_length, (u16)total);
+		} else if ((ctrl->bRequest == dev->vendor_req[0]) &&
+				((ctrl->bRequestType & USB_DIR_IN) ==  USB_DIR_OUT)) {
+			cdev->gadget->ep0->driver_data = dev;
+			cdev->req->complete = mtp_complete_req_out;
+			value = w_length;
 		}
 	} else if ((ctrl->bRequestType & USB_TYPE_MASK) == USB_TYPE_CLASS) {
 		DBG(cdev, "class request: %d index: %d value: %d length: %d\n",
@@ -1364,7 +1448,7 @@ static int mtp_bind_config(struct usb_configuration *c, bool ptp_config)
 	return usb_add_function(c, &dev->function);
 }
 
-static int mtp_setup(void)
+static int mtp_setup(struct switch_dev	*sdevice)
 {
 	struct mtp_dev *dev;
 	int ret;
@@ -1389,7 +1473,10 @@ static int mtp_setup(void)
 	}
 	INIT_WORK(&dev->send_file_work, send_file_work);
 	INIT_WORK(&dev->receive_file_work, receive_file_work);
+	INIT_WORK(&dev->vendor_req_work, vendor_req_work);
 
+	dev->vendor_req_no = 0;
+	dev->sdev = sdevice;
 	_mtp_dev = dev;
 
 	ret = misc_register(&mtp_device);
@@ -1418,4 +1505,8 @@ static void mtp_cleanup(void)
 	destroy_workqueue(dev->wq);
 	_mtp_dev = NULL;
 	kfree(dev);
+}
+
+static char* mtp_get_vendor_reqp(void) {
+	return _mtp_dev ? _mtp_dev->vendor_req : NULL;
 }

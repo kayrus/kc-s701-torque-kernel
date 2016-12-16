@@ -1,4 +1,8 @@
 /*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
+ */
+/*
  *  linux/drivers/video/fbmem.c
  *
  *  Copyright (C) 1994 Martin Schaller
@@ -34,6 +38,7 @@
 #include <linux/fb.h>
 
 #include <asm/fb.h>
+#include <media/msm_cam_sensor.h>
 
 
     /*
@@ -45,6 +50,8 @@
 static DEFINE_MUTEX(registration_lock);
 struct fb_info *registered_fb[FB_MAX] __read_mostly;
 int num_registered_fb __read_mostly;
+
+int fb_dm_flag = 0x00;
 
 static struct fb_info *get_fb_info(unsigned int idx)
 {
@@ -1079,6 +1086,30 @@ static long do_fb_ioctl(struct fb_info *info, unsigned int cmd,
 	long ret = 0;
 
 	switch (cmd) {
+	case FBIOPUT_DIAGVALID:
+		pr_info("SET do_fb_ioctl(): fb_dm_flag = OFF -----\n");
+		fb_dm_flag = 0x00;
+		return ret;
+	case FBIOPUT_DIAGINVALID:
+		pr_info("SET do_fb_ioctl(): fb_dm_flag = ON -----\n");
+		fb_dm_flag = 0x01;
+		return ret;
+	case FBIOGET_CAMERAONOFF:
+	  {
+		int camera_onoff = 0;
+#ifdef CONFIG_MSM_CAMERA_REL
+		if(msm_sensor_power_state(&camera_onoff)){
+			pr_err("%s: Camera State Check error\n", __func__);
+			camera_onoff = 0;
+		}
+		pr_debug("%s: Camera State is %d \n", __func__, camera_onoff);
+#endif /* CONFIG_MSM_CAMERA_REL */
+		ret = copy_to_user(argp, &camera_onoff, sizeof(camera_onoff)) ? -EFAULT : 0;
+		return ret;
+	  }
+	}
+
+	switch (cmd) {
 	case FBIOGET_VSCREENINFO:
 		if (!lock_fb_info(info))
 			return -ENODEV;
@@ -1113,6 +1144,10 @@ static long do_fb_ioctl(struct fb_info *info, unsigned int cmd,
 		if (copy_from_user(&cmap, argp, sizeof(cmap)))
 			return -EFAULT;
 		ret = fb_set_user_cmap(&cmap, info);
+		if (ret) {
+			if (info)
+				fb_dealloc_cmap(&info->cmap);
+		}
 		break;
 	case FBIOGETCMAP:
 		if (copy_from_user(&cmap, argp, sizeof(cmap)))

@@ -9,6 +9,10 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
+ */
 
 #include <linux/err.h>
 #include <linux/slab.h>
@@ -25,6 +29,12 @@
 #include "mmc_ops.h"
 #include "sd.h"
 #include "sd_ops.h"
+
+#define UHS_SDR104_MIN_DTR	(100 * 1000 * 1000)
+#define UHS_DDR50_MIN_DTR	(50 * 1000 * 1000)
+#define UHS_SDR50_MIN_DTR	(50 * 1000 * 1000)
+#define UHS_SDR25_MIN_DTR	(25 * 1000 * 1000)
+#define UHS_SDR12_MIN_DTR	(12.5 * 1000 * 1000)
 
 static const unsigned int tran_exp[] = {
 	10000,		100000,		1000000,	10000000,
@@ -58,6 +68,11 @@ static const unsigned int tacc_mant[] = {
 			__res |= resp[__off-1] << ((32 - __shft) % 32);	\
 		__res & __mask;						\
 	})
+
+#define MMC_RESCAN_RETRY_MAX 5
+
+unsigned char mmc_eject_status = 1;
+static int mmc_rescan_count    = 0;
 
 /*
  * Given the decoded CSD structure, decode the raw CID to our CID structure.
@@ -129,6 +144,8 @@ static int mmc_decode_csd(struct mmc_card *card)
 			csd->erase_size = UNSTUFF_BITS(resp, 39, 7) + 1;
 			csd->erase_size <<= csd->write_blkbits - 9;
 		}
+		csd->perm_write_protect = UNSTUFF_BITS(resp, 13, 1);
+		csd->tmp_write_protect  = UNSTUFF_BITS(resp, 12, 1);
 		break;
 	case 1:
 		/*
@@ -163,6 +180,8 @@ static int mmc_decode_csd(struct mmc_card *card)
 		csd->write_blkbits = 9;
 		csd->write_partial = 0;
 		csd->erase_size = 1;
+		csd->perm_write_protect = UNSTUFF_BITS(resp, 13, 1);
+		csd->tmp_write_protect  = UNSTUFF_BITS(resp, 12, 1);
 		break;
 	default:
 		pr_err("%s: unrecognised CSD structure version %d\n",
@@ -485,19 +504,14 @@ static void sd_update_bus_speed_mode(struct mmc_card *card)
 		return;
 	}
 
-	if ((card->host->caps & MMC_CAP_UHS_SDR104) &&
-	    (card->sw_caps.sd3_bus_mode & SD_MODE_UHS_SDR104)) {
-			card->sd_bus_speed = UHS_SDR104_BUS_SPEED;
-	} else if ((card->host->caps & MMC_CAP_UHS_DDR50) &&
-		   (card->sw_caps.sd3_bus_mode & SD_MODE_UHS_DDR50)) {
+	if ((card->host->caps & MMC_CAP_UHS_DDR50) &&
+		   (card->sw_caps.sd3_bus_mode & SD_MODE_UHS_DDR50) &&
+		    (card->host->f_max > UHS_DDR50_MIN_DTR)) {
 			card->sd_bus_speed = UHS_DDR50_BUS_SPEED;
-	} else if ((card->host->caps & (MMC_CAP_UHS_SDR104 |
-		    MMC_CAP_UHS_SDR50)) && (card->sw_caps.sd3_bus_mode &
-		    SD_MODE_UHS_SDR50)) {
-			card->sd_bus_speed = UHS_SDR50_BUS_SPEED;
-	} else if ((card->host->caps & (MMC_CAP_UHS_SDR104 |
+	}  else if ((card->host->caps & (MMC_CAP_UHS_SDR104 |
 		    MMC_CAP_UHS_SDR50 | MMC_CAP_UHS_SDR25)) &&
-		   (card->sw_caps.sd3_bus_mode & SD_MODE_UHS_SDR25)) {
+		   (card->sw_caps.sd3_bus_mode & SD_MODE_UHS_SDR25) &&
+		 (card->host->f_max > UHS_SDR25_MIN_DTR)) {
 			card->sd_bus_speed = UHS_SDR25_BUS_SPEED;
 	} else if ((card->host->caps & (MMC_CAP_UHS_SDR104 |
 		    MMC_CAP_UHS_SDR50 | MMC_CAP_UHS_SDR25 |
@@ -666,9 +680,12 @@ static int mmc_sd_change_bus_speed(struct mmc_host *host, unsigned long *freq)
 				MMC_SEND_TUNING_BLOCK);
 		mmc_host_clk_release(card->host);
 
-		if (err)
-			pr_warn("%s: %s: tuning execution failed %d\n",
-				   mmc_hostname(card->host), __func__, err);
+		if (err) {
+			pr_warn("%s: %s: tuning execution failed %d. Restoring to previous clock %lu\n",
+				   mmc_hostname(card->host), __func__, err,
+				   host->clk_scaling.curr_freq);
+			mmc_set_clock(host, host->clk_scaling.curr_freq);
+		}
 	}
 
 out:
@@ -949,7 +966,11 @@ int mmc_sd_setup_card(struct mmc_host *host, struct mmc_card *card,
 			ro = host->ops->get_ro(host);
 			mmc_host_clk_release(card->host);
 		}
-
+		if ( card->csd.perm_write_protect || card->csd.tmp_write_protect )
+		{
+			ro = 1;
+			printk("SD card perm_wp:%d tmp_wp:%d\n", card->csd.perm_write_protect, card->csd.tmp_write_protect);
+		}
 		if (ro < 0) {
 			pr_warning("%s: host does not "
 				"support reading read-only "
@@ -1173,6 +1194,13 @@ static void mmc_sd_detect(struct mmc_host *host)
 #endif
 	mmc_release_host(host);
 
+	/* If there is a sense remove the SD card, I let remove the SD card */
+	if(!err && mmc_eject_status) {
+		mmc_card_set_removed(host->card);
+		err = ETIMEDOUT;
+		pr_info("%s: Because there is already remove detection, remove SDcard\n", mmc_hostname(host));
+	}
+
 	/*
 	 * if detect fails, the device would be removed anyway;
 	 * the rpm framework would mark the device state suspended.
@@ -1333,6 +1361,11 @@ int mmc_attach_sd(struct mmc_host *host)
 	}
 
 	err = mmc_send_app_op_cond(host, 0, &ocr);
+	/* If there is a sense remove the SD card, I let remove the SD card */
+	if(!err && mmc_eject_status) {
+		err = ETIMEDOUT;
+		pr_info("%s: Because there is already remove detection, remove SDcard\n", mmc_hostname(host));
+	}
 	if (err)
 		return err;
 
@@ -1417,6 +1450,9 @@ int mmc_attach_sd(struct mmc_host *host)
 
 	mmc_init_clk_scaling(host);
 
+	/* success mmc_attach_sd() clears the retry count */
+	mmc_rescan_count = 0;
+
 	return 0;
 
 remove_card:
@@ -1429,6 +1465,21 @@ err:
 
 	pr_err("%s: error %d whilst initialising SD card\n",
 		mmc_hostname(host), err);
+
+	if(mmc_rescan_count < MMC_RESCAN_RETRY_MAX) {
+		/* do not retry the card has not been inserted physically  */
+		if(!mmc_eject_status){
+			pr_err("%s: Rescan of the SD card to run after 500ms. retry_count = %d\n",
+				mmc_hostname(host), mmc_rescan_count);
+			mmc_detect_change(host, msecs_to_jiffies(500));
+			mmc_rescan_count++;
+		}
+	}
+	else {
+		pr_err("%s: SD_RESCAN retry-over. retry_count = %d\n", mmc_hostname(host),mmc_rescan_count);
+		/* Retry over occurs clear the retry count */
+		mmc_rescan_count = 0;
+	}
 
 	return err;
 }

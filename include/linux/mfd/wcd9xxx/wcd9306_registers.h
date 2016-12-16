@@ -1,3 +1,7 @@
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
+ */
 /* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -188,7 +192,11 @@
 #define TAPAN_A_MICB_1_CTL			(0x12B)
 #define TAPAN_A_MICB_1_CTL__POR				(0x02)
 #define TAPAN_A_MICB_1_INT_RBIAS			(0x12C)
+#ifdef CONFIG_KYOCERA_MSND
+#define TAPAN_A_MICB_1_INT_RBIAS__POR				(0x00)
+#else /* CONFIG_KYOCERA_MSND */
 #define TAPAN_A_MICB_1_INT_RBIAS__POR				(0x24)
+#endif /* CONFIG_KYOCERA_MSND */
 #define TAPAN_A_MICB_1_MBHC			(0x12D)
 #define TAPAN_A_MICB_1_MBHC__POR				(0x01)
 #define TAPAN_A_MICB_CFILT_2_CTL			(0x12E)
@@ -200,7 +208,11 @@
 #define TAPAN_A_MICB_2_CTL			(0x131)
 #define TAPAN_A_MICB_2_CTL__POR				(0x12)
 #define TAPAN_A_MICB_2_INT_RBIAS			(0x132)
+#ifdef CONFIG_KYOCERA_MSND
+#define TAPAN_A_MICB_2_INT_RBIAS__POR				(0x04)
+#else /* CONFIG_KYOCERA_MSND */
 #define TAPAN_A_MICB_2_INT_RBIAS__POR				(0x24)
+#endif /* CONFIG_KYOCERA_MSND */
 #define TAPAN_A_MICB_2_MBHC			(0x133)
 #define TAPAN_A_MICB_2_MBHC__POR				(0x02)
 #define TAPAN_A_MICB_CFILT_3_CTL			(0x134)
@@ -252,7 +264,11 @@
 #define TAPAN_A_TX_1_2_SAR_ERR_CH2			(0x15C)
 #define TAPAN_A_TX_1_2_SAR_ERR_CH2__POR				(0x00)
 #define TAPAN_A_TX_3_EN			(0x15D)
+#ifdef CONFIG_KYOCERA_MSND
+#define TAPAN_A_TX_3_EN__POR				(0x02)
+#else /* CONFIG_KYOCERA_MSND */
 #define TAPAN_A_TX_3_EN__POR				(0x00)
+#endif /* CONFIG_KYOCERA_MSND */
 #define TAPAN_A_TX_1_2_TEST_EN			(0x15E)
 #define TAPAN_A_TX_1_2_TEST_EN__POR				(0xCC)
 #define TAPAN_A_TX_4_5_TXFE_SC_CTL			(0x15F)

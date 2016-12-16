@@ -1,3 +1,6 @@
+# This software is contributed or developed by KYOCERA Corporation.
+# (C) 2014 KYOCERA Corporation
+#
 menuconfig SOUND
 	tristate "Sound card support"
 	depends on HAS_IOMEM
@@ -135,3 +138,19 @@ config AC97_BUS
 	  sound subsystem and other function drivers completely unrelated to
 	  sound although they're sharing the AC97 bus. Concerned drivers
 	  should "select" this.
+
+config KYOCERA_MSND
+	bool "KYOCERA_MSND"
+	  default n
+
+config KYOCERA_MSND_PTT
+	bool "KYOCERA_MSND_PTT"
+	  default n
+
+config KYOCERA_MSND_HS_GPIO
+    bool "KYOCERA_MSND_HS_GPIO"
+      default n
+
+config KYOCERA_MSND_SANJI_JACK
+    bool "KYOCERA_MSND_SANJI_JACK"
+      default n

@@ -9,6 +9,10 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
+ */
 
 #include <linux/err.h>
 #include <linux/slab.h>
@@ -57,6 +61,17 @@ static const unsigned int tacc_mant[] = {
 			__res |= resp[__off-1] << ((32 - __shft) % 32);	\
 		__res & __mask;						\
 	})
+
+static const struct mmc_fixup mmc_fixups[] = {
+	/*
+	 * Certain Hynix eMMC 4.41 cards might get broken when HPI feature
+	 * is used so disable the HPI feature for such buggy cards.
+	 */
+	MMC_FIXUP_EXT_CSD_REV(CID_NAME_ANY, CID_MANFID_HYNIX,
+			      0x014a, add_quirk, MMC_QUIRK_BROKEN_HPI, 5),
+
+	END_FIXUP
+};
 
 /*
  * Given the decoded CSD structure, decode the raw CID to our CID structure.
@@ -263,6 +278,12 @@ static void mmc_select_card_type(struct mmc_card *card)
 			card_type & EXT_CSD_CARD_TYPE_SDR_1_2V))
 		hs_max_dtr = MMC_HS200_MAX_DTR;
 
+	if ((caps2 & MMC_CAP2_HS400_1_8V &&
+			card_type & EXT_CSD_CARD_TYPE_HS400_1_8V) ||
+	    (caps2 & MMC_CAP2_HS400_1_2V &&
+			card_type & EXT_CSD_CARD_TYPE_HS400_1_2V))
+		hs_max_dtr = MMC_HS400_MAX_DTR;
+
 	card->ext_csd.hs_max_dtr = hs_max_dtr;
 	card->ext_csd.card_type = card_type;
 }
@@ -300,6 +321,9 @@ static int mmc_read_ext_csd(struct mmc_card *card, u8 *ext_csd)
 		err = -EINVAL;
 		goto out;
 	}
+
+	/* fixup device after ext_csd revision field is updated */
+	mmc_fixup_device(card, mmc_fixups);
 
 	card->ext_csd.raw_sectors[0] = ext_csd[EXT_CSD_SEC_CNT + 0];
 	card->ext_csd.raw_sectors[1] = ext_csd[EXT_CSD_SEC_CNT + 1];
@@ -465,8 +489,28 @@ static int mmc_read_ext_csd(struct mmc_card *card, u8 *ext_csd)
 	}
 
 	if (card->ext_csd.rev >= 5) {
-		/* check whether the eMMC card supports BKOPS */
-		if (ext_csd[EXT_CSD_BKOPS_SUPPORT] & 0x1) {
+		/* check whether the eMMC card supports HPI */
+		if ((ext_csd[EXT_CSD_HPI_FEATURES] & 0x1) &&
+				!(card->quirks & MMC_QUIRK_BROKEN_HPI)) {
+			card->ext_csd.hpi = 1;
+			if (ext_csd[EXT_CSD_HPI_FEATURES] & 0x2)
+				card->ext_csd.hpi_cmd = MMC_STOP_TRANSMISSION;
+			else
+				card->ext_csd.hpi_cmd = MMC_SEND_STATUS;
+			/*
+			 * Indicate the maximum timeout to close
+			 * a command interrupted by HPI
+			 */
+			card->ext_csd.out_of_int_time =
+				ext_csd[EXT_CSD_OUT_OF_INTERRUPT_TIME] * 10;
+		}
+
+		/*
+		 * check whether the eMMC card supports BKOPS.
+		 * If HPI is not supported then BKOPs shouldn't be enabled.
+		 */
+		if ((ext_csd[EXT_CSD_BKOPS_SUPPORT] & 0x1) &&
+		    card->ext_csd.hpi) {
 			card->ext_csd.bkops = 1;
 			card->ext_csd.bkops_en = ext_csd[EXT_CSD_BKOPS_EN];
 			card->ext_csd.raw_bkops_status =
@@ -483,23 +527,12 @@ static int mmc_read_ext_csd(struct mmc_card *card, u8 *ext_csd)
 			}
 		}
 
-		pr_info("%s: BKOPS_EN bit = %d\n",
-			mmc_hostname(card->host), card->ext_csd.bkops_en);
-
-		/* check whether the eMMC card supports HPI */
-		if (ext_csd[EXT_CSD_HPI_FEATURES] & 0x1) {
-			card->ext_csd.hpi = 1;
-			if (ext_csd[EXT_CSD_HPI_FEATURES] & 0x2)
-				card->ext_csd.hpi_cmd =	MMC_STOP_TRANSMISSION;
-			else
-				card->ext_csd.hpi_cmd = MMC_SEND_STATUS;
-			/*
-			 * Indicate the maximum timeout to close
-			 * a command interrupted by HPI
-			 */
-			card->ext_csd.out_of_int_time =
-				ext_csd[EXT_CSD_OUT_OF_INTERRUPT_TIME] * 10;
+		if (card->cid.manfid == 0x11) {
+				card->ext_csd.bkops_en = 0;
 		}
+
+		pr_notice("%s: BKOPS_EN bit = %d\n",
+			mmc_hostname(card->host), card->ext_csd.bkops_en);
 
 		card->ext_csd.rel_param = ext_csd[EXT_CSD_WR_REL_PARAM];
 		card->ext_csd.rst_n_function = ext_csd[EXT_CSD_RST_N_FUNCTION];
@@ -556,6 +589,8 @@ static int mmc_read_ext_csd(struct mmc_card *card, u8 *ext_csd)
 		card->ext_csd.max_packed_reads =
 			ext_csd[EXT_CSD_MAX_PACKED_READS];
 	}
+	
+	memcpy(&(card->raw_extcsd_all[0]), ext_csd, 512);
 
 out:
 	return err;
@@ -648,6 +683,107 @@ MMC_DEV_ATTR(enhanced_area_size, "%u\n", card->ext_csd.enhanced_area_size);
 MMC_DEV_ATTR(raw_rpmb_size_mult, "%#x\n", card->ext_csd.raw_rpmb_size_mult);
 MMC_DEV_ATTR(rel_sectors, "%#x\n", card->ext_csd.rel_sectors);
 
+MMC_DEV_ATTR(extcsd_1, "%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+card->raw_extcsd_all[0],card->raw_extcsd_all[1],card->raw_extcsd_all[2],card->raw_extcsd_all[3],card->raw_extcsd_all[4],card->raw_extcsd_all[5],card->raw_extcsd_all[6],card->raw_extcsd_all[7],
+card->raw_extcsd_all[8],card->raw_extcsd_all[9],card->raw_extcsd_all[10],card->raw_extcsd_all[11],card->raw_extcsd_all[12],card->raw_extcsd_all[13],card->raw_extcsd_all[14],card->raw_extcsd_all[15],
+card->raw_extcsd_all[16],card->raw_extcsd_all[17],card->raw_extcsd_all[18],card->raw_extcsd_all[19],card->raw_extcsd_all[20],card->raw_extcsd_all[21],card->raw_extcsd_all[22],card->raw_extcsd_all[23],
+card->raw_extcsd_all[24],card->raw_extcsd_all[25],card->raw_extcsd_all[26],card->raw_extcsd_all[27],card->raw_extcsd_all[28],card->raw_extcsd_all[29],card->raw_extcsd_all[30],card->raw_extcsd_all[31],
+card->raw_extcsd_all[32],card->raw_extcsd_all[33],card->raw_extcsd_all[34],card->raw_extcsd_all[35],card->raw_extcsd_all[36],card->raw_extcsd_all[37],card->raw_extcsd_all[38],card->raw_extcsd_all[39],
+card->raw_extcsd_all[40],card->raw_extcsd_all[41],card->raw_extcsd_all[42],card->raw_extcsd_all[43],card->raw_extcsd_all[44],card->raw_extcsd_all[45],card->raw_extcsd_all[46],card->raw_extcsd_all[47],
+card->raw_extcsd_all[48],card->raw_extcsd_all[49],card->raw_extcsd_all[50],card->raw_extcsd_all[51],card->raw_extcsd_all[52],card->raw_extcsd_all[53],card->raw_extcsd_all[54],card->raw_extcsd_all[55],
+card->raw_extcsd_all[56],card->raw_extcsd_all[57],card->raw_extcsd_all[58],card->raw_extcsd_all[59],card->raw_extcsd_all[60],card->raw_extcsd_all[61],card->raw_extcsd_all[62],card->raw_extcsd_all[63],
+card->raw_extcsd_all[64],card->raw_extcsd_all[65],card->raw_extcsd_all[66],card->raw_extcsd_all[67],card->raw_extcsd_all[68],card->raw_extcsd_all[69],card->raw_extcsd_all[70],card->raw_extcsd_all[71],
+card->raw_extcsd_all[72],card->raw_extcsd_all[73],card->raw_extcsd_all[74],card->raw_extcsd_all[75],card->raw_extcsd_all[76],card->raw_extcsd_all[77],card->raw_extcsd_all[78],card->raw_extcsd_all[79],
+card->raw_extcsd_all[80],card->raw_extcsd_all[81],card->raw_extcsd_all[82],card->raw_extcsd_all[83],card->raw_extcsd_all[84],card->raw_extcsd_all[85],card->raw_extcsd_all[86],card->raw_extcsd_all[87],
+card->raw_extcsd_all[88],card->raw_extcsd_all[89],card->raw_extcsd_all[90],card->raw_extcsd_all[91],card->raw_extcsd_all[92],card->raw_extcsd_all[93],card->raw_extcsd_all[94],card->raw_extcsd_all[95],
+card->raw_extcsd_all[96],card->raw_extcsd_all[97],card->raw_extcsd_all[98],card->raw_extcsd_all[99],card->raw_extcsd_all[100],card->raw_extcsd_all[101],card->raw_extcsd_all[102],card->raw_extcsd_all[103],
+card->raw_extcsd_all[104],card->raw_extcsd_all[105],card->raw_extcsd_all[106],card->raw_extcsd_all[107],card->raw_extcsd_all[108],card->raw_extcsd_all[109],card->raw_extcsd_all[110],card->raw_extcsd_all[111],
+card->raw_extcsd_all[112],card->raw_extcsd_all[113],card->raw_extcsd_all[114],card->raw_extcsd_all[115],card->raw_extcsd_all[116],card->raw_extcsd_all[117],card->raw_extcsd_all[118],card->raw_extcsd_all[119],
+card->raw_extcsd_all[120],card->raw_extcsd_all[121],card->raw_extcsd_all[122],card->raw_extcsd_all[123],card->raw_extcsd_all[124],card->raw_extcsd_all[125],card->raw_extcsd_all[126],card->raw_extcsd_all[127]);
+
+
+MMC_DEV_ATTR(extcsd_2, "%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+card->raw_extcsd_all[128],card->raw_extcsd_all[129],card->raw_extcsd_all[130],card->raw_extcsd_all[131],card->raw_extcsd_all[132],card->raw_extcsd_all[133],card->raw_extcsd_all[134],card->raw_extcsd_all[135],
+card->raw_extcsd_all[136],card->raw_extcsd_all[137],card->raw_extcsd_all[138],card->raw_extcsd_all[139],card->raw_extcsd_all[140],card->raw_extcsd_all[141],card->raw_extcsd_all[142],card->raw_extcsd_all[143],
+card->raw_extcsd_all[144],card->raw_extcsd_all[145],card->raw_extcsd_all[146],card->raw_extcsd_all[147],card->raw_extcsd_all[148],card->raw_extcsd_all[149],card->raw_extcsd_all[150],card->raw_extcsd_all[151],
+card->raw_extcsd_all[152],card->raw_extcsd_all[153],card->raw_extcsd_all[154],card->raw_extcsd_all[155],card->raw_extcsd_all[156],card->raw_extcsd_all[157],card->raw_extcsd_all[158],card->raw_extcsd_all[159],
+card->raw_extcsd_all[160],card->raw_extcsd_all[161],card->raw_extcsd_all[162],card->raw_extcsd_all[163],card->raw_extcsd_all[164],card->raw_extcsd_all[165],card->raw_extcsd_all[166],card->raw_extcsd_all[167],
+card->raw_extcsd_all[168],card->raw_extcsd_all[169],card->raw_extcsd_all[170],card->raw_extcsd_all[171],card->raw_extcsd_all[172],card->raw_extcsd_all[173],card->raw_extcsd_all[174],card->raw_extcsd_all[175],
+card->raw_extcsd_all[176],card->raw_extcsd_all[177],card->raw_extcsd_all[178],card->raw_extcsd_all[179],card->raw_extcsd_all[180],card->raw_extcsd_all[181],card->raw_extcsd_all[182],card->raw_extcsd_all[183],
+card->raw_extcsd_all[184],card->raw_extcsd_all[185],card->raw_extcsd_all[186],card->raw_extcsd_all[187],card->raw_extcsd_all[188],card->raw_extcsd_all[189],card->raw_extcsd_all[190],card->raw_extcsd_all[191],
+card->raw_extcsd_all[192],card->raw_extcsd_all[193],card->raw_extcsd_all[194],card->raw_extcsd_all[195],card->raw_extcsd_all[196],card->raw_extcsd_all[197],card->raw_extcsd_all[198],card->raw_extcsd_all[199],
+card->raw_extcsd_all[200],card->raw_extcsd_all[201],card->raw_extcsd_all[202],card->raw_extcsd_all[203],card->raw_extcsd_all[204],card->raw_extcsd_all[205],card->raw_extcsd_all[206],card->raw_extcsd_all[207],
+card->raw_extcsd_all[208],card->raw_extcsd_all[209],card->raw_extcsd_all[210],card->raw_extcsd_all[211],card->raw_extcsd_all[212],card->raw_extcsd_all[213],card->raw_extcsd_all[214],card->raw_extcsd_all[215],
+card->raw_extcsd_all[216],card->raw_extcsd_all[217],card->raw_extcsd_all[218],card->raw_extcsd_all[219],card->raw_extcsd_all[220],card->raw_extcsd_all[221],card->raw_extcsd_all[222],card->raw_extcsd_all[223],
+card->raw_extcsd_all[224],card->raw_extcsd_all[225],card->raw_extcsd_all[226],card->raw_extcsd_all[227],card->raw_extcsd_all[228],card->raw_extcsd_all[229],card->raw_extcsd_all[230],card->raw_extcsd_all[231],
+card->raw_extcsd_all[232],card->raw_extcsd_all[233],card->raw_extcsd_all[234],card->raw_extcsd_all[235],card->raw_extcsd_all[236],card->raw_extcsd_all[237],card->raw_extcsd_all[238],card->raw_extcsd_all[239],
+card->raw_extcsd_all[240],card->raw_extcsd_all[241],card->raw_extcsd_all[242],card->raw_extcsd_all[243],card->raw_extcsd_all[244],card->raw_extcsd_all[245],card->raw_extcsd_all[246],card->raw_extcsd_all[247],
+card->raw_extcsd_all[248],card->raw_extcsd_all[249],card->raw_extcsd_all[250],card->raw_extcsd_all[251],card->raw_extcsd_all[252],card->raw_extcsd_all[253],card->raw_extcsd_all[254],card->raw_extcsd_all[255]);
+
+MMC_DEV_ATTR(extcsd_3, "%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+card->raw_extcsd_all[256],card->raw_extcsd_all[257],card->raw_extcsd_all[258],card->raw_extcsd_all[259],card->raw_extcsd_all[260],card->raw_extcsd_all[261],card->raw_extcsd_all[262],card->raw_extcsd_all[263],
+card->raw_extcsd_all[264],card->raw_extcsd_all[265],card->raw_extcsd_all[266],card->raw_extcsd_all[267],card->raw_extcsd_all[268],card->raw_extcsd_all[269],card->raw_extcsd_all[270],card->raw_extcsd_all[271],
+card->raw_extcsd_all[272],card->raw_extcsd_all[273],card->raw_extcsd_all[274],card->raw_extcsd_all[275],card->raw_extcsd_all[276],card->raw_extcsd_all[277],card->raw_extcsd_all[278],card->raw_extcsd_all[279],
+card->raw_extcsd_all[280],card->raw_extcsd_all[281],card->raw_extcsd_all[282],card->raw_extcsd_all[283],card->raw_extcsd_all[284],card->raw_extcsd_all[285],card->raw_extcsd_all[286],card->raw_extcsd_all[287],
+card->raw_extcsd_all[288],card->raw_extcsd_all[289],card->raw_extcsd_all[290],card->raw_extcsd_all[291],card->raw_extcsd_all[292],card->raw_extcsd_all[293],card->raw_extcsd_all[294],card->raw_extcsd_all[295],
+card->raw_extcsd_all[296],card->raw_extcsd_all[297],card->raw_extcsd_all[298],card->raw_extcsd_all[299],card->raw_extcsd_all[300],card->raw_extcsd_all[301],card->raw_extcsd_all[302],card->raw_extcsd_all[303],
+card->raw_extcsd_all[304],card->raw_extcsd_all[305],card->raw_extcsd_all[306],card->raw_extcsd_all[307],card->raw_extcsd_all[308],card->raw_extcsd_all[309],card->raw_extcsd_all[310],card->raw_extcsd_all[311],
+card->raw_extcsd_all[312],card->raw_extcsd_all[313],card->raw_extcsd_all[314],card->raw_extcsd_all[315],card->raw_extcsd_all[316],card->raw_extcsd_all[317],card->raw_extcsd_all[318],card->raw_extcsd_all[319],
+card->raw_extcsd_all[320],card->raw_extcsd_all[321],card->raw_extcsd_all[322],card->raw_extcsd_all[323],card->raw_extcsd_all[324],card->raw_extcsd_all[325],card->raw_extcsd_all[326],card->raw_extcsd_all[327],
+card->raw_extcsd_all[328],card->raw_extcsd_all[329],card->raw_extcsd_all[330],card->raw_extcsd_all[331],card->raw_extcsd_all[332],card->raw_extcsd_all[333],card->raw_extcsd_all[334],card->raw_extcsd_all[335],
+card->raw_extcsd_all[336],card->raw_extcsd_all[337],card->raw_extcsd_all[338],card->raw_extcsd_all[339],card->raw_extcsd_all[340],card->raw_extcsd_all[341],card->raw_extcsd_all[342],card->raw_extcsd_all[343],
+card->raw_extcsd_all[344],card->raw_extcsd_all[345],card->raw_extcsd_all[346],card->raw_extcsd_all[347],card->raw_extcsd_all[348],card->raw_extcsd_all[349],card->raw_extcsd_all[350],card->raw_extcsd_all[351],
+card->raw_extcsd_all[352],card->raw_extcsd_all[353],card->raw_extcsd_all[354],card->raw_extcsd_all[355],card->raw_extcsd_all[356],card->raw_extcsd_all[357],card->raw_extcsd_all[358],card->raw_extcsd_all[359],
+card->raw_extcsd_all[360],card->raw_extcsd_all[361],card->raw_extcsd_all[362],card->raw_extcsd_all[363],card->raw_extcsd_all[364],card->raw_extcsd_all[365],card->raw_extcsd_all[366],card->raw_extcsd_all[367],
+card->raw_extcsd_all[368],card->raw_extcsd_all[369],card->raw_extcsd_all[370],card->raw_extcsd_all[371],card->raw_extcsd_all[372],card->raw_extcsd_all[373],card->raw_extcsd_all[374],card->raw_extcsd_all[375],
+card->raw_extcsd_all[376],card->raw_extcsd_all[377],card->raw_extcsd_all[378],card->raw_extcsd_all[379],card->raw_extcsd_all[380],card->raw_extcsd_all[381],card->raw_extcsd_all[382],card->raw_extcsd_all[383]);
+
+MMC_DEV_ATTR(extcsd_4, "%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n\
+%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+card->raw_extcsd_all[384],card->raw_extcsd_all[385],card->raw_extcsd_all[386],card->raw_extcsd_all[387],card->raw_extcsd_all[388],card->raw_extcsd_all[389],card->raw_extcsd_all[390],card->raw_extcsd_all[391],
+card->raw_extcsd_all[392],card->raw_extcsd_all[393],card->raw_extcsd_all[394],card->raw_extcsd_all[395],card->raw_extcsd_all[396],card->raw_extcsd_all[397],card->raw_extcsd_all[398],card->raw_extcsd_all[399],
+card->raw_extcsd_all[400],card->raw_extcsd_all[401],card->raw_extcsd_all[402],card->raw_extcsd_all[403],card->raw_extcsd_all[404],card->raw_extcsd_all[405],card->raw_extcsd_all[406],card->raw_extcsd_all[407],
+card->raw_extcsd_all[408],card->raw_extcsd_all[409],card->raw_extcsd_all[410],card->raw_extcsd_all[411],card->raw_extcsd_all[412],card->raw_extcsd_all[413],card->raw_extcsd_all[414],card->raw_extcsd_all[415],
+card->raw_extcsd_all[416],card->raw_extcsd_all[417],card->raw_extcsd_all[418],card->raw_extcsd_all[419],card->raw_extcsd_all[420],card->raw_extcsd_all[421],card->raw_extcsd_all[422],card->raw_extcsd_all[423],
+card->raw_extcsd_all[424],card->raw_extcsd_all[425],card->raw_extcsd_all[426],card->raw_extcsd_all[427],card->raw_extcsd_all[428],card->raw_extcsd_all[429],card->raw_extcsd_all[430],card->raw_extcsd_all[431],
+card->raw_extcsd_all[432],card->raw_extcsd_all[433],card->raw_extcsd_all[434],card->raw_extcsd_all[435],card->raw_extcsd_all[436],card->raw_extcsd_all[437],card->raw_extcsd_all[438],card->raw_extcsd_all[439],
+card->raw_extcsd_all[440],card->raw_extcsd_all[441],card->raw_extcsd_all[442],card->raw_extcsd_all[443],card->raw_extcsd_all[444],card->raw_extcsd_all[445],card->raw_extcsd_all[446],card->raw_extcsd_all[447],
+card->raw_extcsd_all[448],card->raw_extcsd_all[449],card->raw_extcsd_all[450],card->raw_extcsd_all[451],card->raw_extcsd_all[452],card->raw_extcsd_all[453],card->raw_extcsd_all[454],card->raw_extcsd_all[455],
+card->raw_extcsd_all[456],card->raw_extcsd_all[457],card->raw_extcsd_all[458],card->raw_extcsd_all[459],card->raw_extcsd_all[460],card->raw_extcsd_all[461],card->raw_extcsd_all[462],card->raw_extcsd_all[463],
+card->raw_extcsd_all[464],card->raw_extcsd_all[465],card->raw_extcsd_all[466],card->raw_extcsd_all[467],card->raw_extcsd_all[468],card->raw_extcsd_all[469],card->raw_extcsd_all[470],card->raw_extcsd_all[471],
+card->raw_extcsd_all[472],card->raw_extcsd_all[473],card->raw_extcsd_all[474],card->raw_extcsd_all[475],card->raw_extcsd_all[476],card->raw_extcsd_all[477],card->raw_extcsd_all[478],card->raw_extcsd_all[479],
+card->raw_extcsd_all[480],card->raw_extcsd_all[481],card->raw_extcsd_all[482],card->raw_extcsd_all[483],card->raw_extcsd_all[484],card->raw_extcsd_all[485],card->raw_extcsd_all[486],card->raw_extcsd_all[487],
+card->raw_extcsd_all[488],card->raw_extcsd_all[489],card->raw_extcsd_all[490],card->raw_extcsd_all[491],card->raw_extcsd_all[492],card->raw_extcsd_all[493],card->raw_extcsd_all[494],card->raw_extcsd_all[495],
+card->raw_extcsd_all[496],card->raw_extcsd_all[497],card->raw_extcsd_all[498],card->raw_extcsd_all[499],card->raw_extcsd_all[500],card->raw_extcsd_all[501],card->raw_extcsd_all[502],card->raw_extcsd_all[503],
+card->raw_extcsd_all[504],card->raw_extcsd_all[505],card->raw_extcsd_all[506],card->raw_extcsd_all[507],card->raw_extcsd_all[508],card->raw_extcsd_all[509],card->raw_extcsd_all[510],card->raw_extcsd_all[511]);
+
 static struct attribute *mmc_std_attrs[] = {
 	&dev_attr_cid.attr,
 	&dev_attr_csd.attr,
@@ -664,6 +800,10 @@ static struct attribute *mmc_std_attrs[] = {
 	&dev_attr_enhanced_area_size.attr,
 	&dev_attr_raw_rpmb_size_mult.attr,
 	&dev_attr_rel_sectors.attr,
+	&dev_attr_extcsd_1.attr,
+	&dev_attr_extcsd_2.attr,
+	&dev_attr_extcsd_3.attr,
+	&dev_attr_extcsd_4.attr,
 	NULL,
 };
 
@@ -719,7 +859,9 @@ static int mmc_select_powerclass(struct mmc_card *card,
 				EXT_CSD_PWR_CL_52_195 :
 				EXT_CSD_PWR_CL_DDR_52_195;
 		else if (host->ios.clock <= 200000000)
-			index = EXT_CSD_PWR_CL_200_195;
+			index = (bus_width <= EXT_CSD_BUS_WIDTH_8) ?
+				EXT_CSD_PWR_CL_200_195 :
+				EXT_CSD_PWR_CL_DDR_200_195;
 		break;
 	case MMC_VDD_27_28:
 	case MMC_VDD_28_29:
@@ -737,7 +879,9 @@ static int mmc_select_powerclass(struct mmc_card *card,
 				EXT_CSD_PWR_CL_52_360 :
 				EXT_CSD_PWR_CL_DDR_52_360;
 		else if (host->ios.clock <= 200000000)
-			index = EXT_CSD_PWR_CL_200_360;
+			index = (bus_width <= EXT_CSD_BUS_WIDTH_8) ?
+				EXT_CSD_PWR_CL_200_360 :
+				EXT_CSD_PWR_CL_DDR_200_360;
 		break;
 	default:
 		pr_warning("%s: Voltage range not supported "
@@ -766,75 +910,405 @@ static int mmc_select_powerclass(struct mmc_card *card,
 }
 
 /*
- * Selects the desired buswidth and switch to the HS200 mode
- * if bus width set without error
+ * Select the correct bus width supported by both host and card
  */
-static int mmc_select_hs200(struct mmc_card *card)
+static int mmc_select_bus_width(struct mmc_card *card, int ddr, u8 *ext_csd)
 {
-	int idx, err = 0;
 	struct mmc_host *host;
-	static unsigned ext_csd_bits[] = {
-		EXT_CSD_BUS_WIDTH_4,
-		EXT_CSD_BUS_WIDTH_8,
+	static unsigned ext_csd_bits[][2] = {
+		{ EXT_CSD_BUS_WIDTH_8, EXT_CSD_DDR_BUS_WIDTH_8 },
+		{ EXT_CSD_BUS_WIDTH_4, EXT_CSD_DDR_BUS_WIDTH_4 },
+		{ EXT_CSD_BUS_WIDTH_1, EXT_CSD_BUS_WIDTH_1 },
 	};
 	static unsigned bus_widths[] = {
-		MMC_BUS_WIDTH_4,
 		MMC_BUS_WIDTH_8,
+		MMC_BUS_WIDTH_4,
+		MMC_BUS_WIDTH_1
 	};
-
-	BUG_ON(!card);
+	unsigned idx, bus_width = 0;
+	int err = 0;
 
 	host = card->host;
+
+	if ((card->csd.mmca_vsn < CSD_SPEC_VER_4) ||
+	    !(host->caps & (MMC_CAP_4_BIT_DATA | MMC_CAP_8_BIT_DATA)))
+		goto out;
+
+	if (host->caps & MMC_CAP_8_BIT_DATA)
+		idx = 0;
+	else
+		idx = 1;
+
+	for (; idx < ARRAY_SIZE(bus_widths); idx++) {
+		bus_width = bus_widths[idx];
+		if (bus_width == MMC_BUS_WIDTH_1)
+			ddr = 0; /* no DDR for 1-bit width */
+		err = mmc_select_powerclass(card, ext_csd_bits[idx][0],
+					    ext_csd);
+		if (err)
+			pr_warning("%s: power class selection to " \
+				   "bus width %d failed\n",
+				   mmc_hostname(host),
+				   1 << bus_width);
+
+		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
+				 EXT_CSD_BUS_WIDTH,
+				 ext_csd_bits[idx][0],
+				 card->ext_csd.generic_cmd6_time);
+		if (!err) {
+			mmc_set_bus_width(host, bus_width);
+
+			/*
+			 * If controller can't handle bus width test,
+			 * compare ext_csd previously read in 1 bit mode
+			 * against ext_csd at new bus width
+			 */
+			if (!(host->caps & MMC_CAP_BUS_WIDTH_TEST))
+				err = mmc_compare_ext_csds(card, bus_width);
+			else
+				err = mmc_bus_test(card, bus_width);
+			if (!err)
+				break;
+		}
+	}
+
+	if (!err && ddr) {
+		err = mmc_select_powerclass(card, ext_csd_bits[idx][1],
+					    ext_csd);
+		if (err)
+			pr_warning("%s: power class selection to " \
+				   "bus width %d ddr %d failed\n",
+				   mmc_hostname(host),
+				   1 << bus_width, ddr);
+			err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
+					 EXT_CSD_BUS_WIDTH,
+					 ext_csd_bits[idx][1],
+					 card->ext_csd.generic_cmd6_time);
+	}
+
+out:
+	return err;
+}
+
+/*
+ * Switch to HighSpeed mode and select wide bus if supported
+ */
+static int mmc_select_hs(struct mmc_card *card, u8 *ext_csd)
+{
+	int err = 0;
+	struct mmc_host *host;
+
+	host = card->host;
+
+	if (!(host->caps & MMC_CAP_MMC_HIGHSPEED) ||
+		!(card->ext_csd.card_type & EXT_CSD_CARD_TYPE_52)) {
+		err = -EOPNOTSUPP;
+		goto out;
+	}
+
+	err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
+				EXT_CSD_HS_TIMING, 1,
+				card->ext_csd.generic_cmd6_time);
+
+	if (err && err != -EBADMSG)
+		goto out;
+
+	mmc_card_set_highspeed(card);
+	mmc_set_timing(host, MMC_TIMING_MMC_HS);
+	mmc_set_clock(host, MMC_HIGH_52_MAX_DTR);
+
+	err = mmc_select_bus_width(card, 0, ext_csd);
+
+out:
+	if (err && err != -EOPNOTSUPP)
+		pr_warning("%s: Switch to HighSpeed mode failed (err:%d)\n",
+				mmc_hostname(host), err);
+	return err;
+}
+
+/*
+ * Select the desired buswidth and switch to HighSpeed DDR mode
+ * if bus width set without error
+ */
+static int mmc_select_hsddr(struct mmc_card *card, u8 *ext_csd)
+{
+	int ddr = 0, err = 0;
+	struct mmc_host *host;
+
+	host = card->host;
+
+	if (!(host->caps & MMC_CAP_HSDDR) ||
+		!(card->ext_csd.card_type & EXT_CSD_CARD_TYPE_DDR_52)) {
+		err = -EOPNOTSUPP;
+		goto out;
+	}
+
+	err = mmc_select_hs(card, ext_csd);
+	if (err)
+		goto out;
+	mmc_card_clr_highspeed(card);
+
+	if ((card->ext_csd.card_type & EXT_CSD_CARD_TYPE_DDR_1_8V)
+		&& ((host->caps & (MMC_CAP_1_8V_DDR |
+		     MMC_CAP_UHS_DDR50))
+			== (MMC_CAP_1_8V_DDR | MMC_CAP_UHS_DDR50)))
+			ddr = MMC_1_8V_DDR_MODE;
+	else if ((card->ext_csd.card_type & EXT_CSD_CARD_TYPE_DDR_1_2V)
+		&& ((host->caps & (MMC_CAP_1_2V_DDR |
+		     MMC_CAP_UHS_DDR50))
+			== (MMC_CAP_1_2V_DDR | MMC_CAP_UHS_DDR50)))
+			ddr = MMC_1_2V_DDR_MODE;
+
+	err = mmc_select_bus_width(card, ddr, ext_csd);
+	if (err)
+		goto out;
+
+	if (host->ios.bus_width == MMC_BUS_WIDTH_1) {
+		pr_err("%s: failed to switch to wide bus\n",
+			mmc_hostname(host));
+		goto out;
+	}
+
+	/*
+	 * eMMC cards can support 3.3V to 1.2V i/o (vccq)
+	 * signaling.
+	 *
+	 * EXT_CSD_CARD_TYPE_DDR_1_8V means 3.3V or 1.8V vccq.
+	 *
+	 * 1.8V vccq at 3.3V core voltage (vcc) is not required
+	 * in the JEDEC spec for DDR.
+	 *
+	 * Do not force change in vccq since we are obviously
+	 * working and no change to vccq is needed.
+	 *
+	 * WARNING: eMMC rules are NOT the same as SD DDR
+	 */
+	if (ddr == MMC_1_2V_DDR_MODE) {
+		err = mmc_set_signal_voltage(host,
+			MMC_SIGNAL_VOLTAGE_120, 0);
+		if (err)
+			goto out;
+	}
+	mmc_card_set_ddr_mode(card);
+	mmc_set_timing(host, MMC_TIMING_UHS_DDR50);
+	mmc_set_bus_width(host, host->ios.bus_width);
+
+out:
+	if (err && err != -EOPNOTSUPP)
+		pr_warning("%s: Switch to HighSpeed DDR mode failed (err:%d)\n",
+				mmc_hostname(host), err);
+	return err;
+}
+
+/*
+ * Select the desired buswidth and switch to HS200 mode
+ * if bus width set without error
+ */
+static int mmc_select_hs200(struct mmc_card *card, u8 *ext_csd)
+{
+	int err = 0;
+	struct mmc_host *host;
+
+	host = card->host;
+
+	if (!(host->caps2 & MMC_CAP2_HS200) ||
+		!(card->ext_csd.card_type & EXT_CSD_CARD_TYPE_HS200)) {
+		err = -EOPNOTSUPP;
+		goto out;
+	}
 
 	if (card->ext_csd.card_type & EXT_CSD_CARD_TYPE_SDR_1_2V &&
 	    host->caps2 & MMC_CAP2_HS200_1_2V_SDR)
 		if (mmc_set_signal_voltage(host, MMC_SIGNAL_VOLTAGE_120, 0))
 			err = mmc_set_signal_voltage(host,
 						     MMC_SIGNAL_VOLTAGE_180, 0);
-
 	/* If fails try again during next card power cycle */
 	if (err)
-		goto err;
-
-	idx = (host->caps & MMC_CAP_8_BIT_DATA) ? 1 : 0;
+		goto out;
 
 	/*
-	 * Unlike SD, MMC cards dont have a configuration register to notify
-	 * supported bus width. So bus test command should be run to identify
-	 * the supported bus width or compare the ext csd values of current
-	 * bus width and ext csd values of 1 bit mode read earlier.
+	 * For devices supporting HS200 mode, the bus width has
+	 * to be set before executing the tuning function. If
+	 * set before tuning, then device will respond with CRC
+	 * errors for responses on CMD line. So for HS200 the
+	 * sequence will be
+	 * 1. set bus width 4bit / 8 bit (1 bit not supported)
+	 * 2. switch to HS200 mode
+	 * 3. set the clock to > 52Mhz <=200MHz and
+	 * 4. execute tuning for HS200
 	 */
-	for (; idx >= 0; idx--) {
+	err = mmc_select_bus_width(card, 0, ext_csd);
+	if (err) {
+		pr_err("%s: select bus width failed\n",
+			mmc_hostname(host));
+		goto out;
+	}
 
-		/*
-		 * Host is capable of 8bit transfer, then switch
-		 * the device to work in 8bit transfer mode. If the
-		 * mmc switch command returns error then switch to
-		 * 4bit transfer mode. On success set the corresponding
-		 * bus width on the host.
-		 */
-		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
-				 EXT_CSD_BUS_WIDTH,
-				 ext_csd_bits[idx],
-				 card->ext_csd.generic_cmd6_time);
-		if (err)
-			continue;
-
-		mmc_set_bus_width(card->host, bus_widths[idx]);
-
-		if (!(host->caps & MMC_CAP_BUS_WIDTH_TEST))
-			err = mmc_compare_ext_csds(card, bus_widths[idx]);
-		else
-			err = mmc_bus_test(card, bus_widths[idx]);
-		if (!err)
-			break;
+	if (host->ios.bus_width == MMC_BUS_WIDTH_1) {
+		pr_err("%s: failed to switch to wide bus\n",
+			mmc_hostname(host));
+		goto out;
 	}
 
 	/* switch to HS200 mode if bus width set successfully */
-	if (!err)
-		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
-				 EXT_CSD_HS_TIMING, 2, 0);
-err:
+	err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
+				EXT_CSD_HS_TIMING, 2, 0);
+
+	if (err && err != -EBADMSG) {
+		pr_err("%s: HS200 switch failed\n",
+			mmc_hostname(host));
+		goto out;
+	}
+
+	/*
+	 * When HS200 activation is performed as part of HS400 selection
+	 * set the timing appropriately
+	 */
+	if (mmc_card_hs400(card))
+		mmc_set_timing(host, MMC_TIMING_MMC_HS400);
+	else
+		mmc_set_timing(host, MMC_TIMING_MMC_HS200);
+
+	mmc_set_clock(host, MMC_HS200_MAX_DTR);
+
+	if (host->ops->execute_tuning) {
+		mmc_host_clk_hold(host);
+		err = host->ops->execute_tuning(host,
+				MMC_SEND_TUNING_BLOCK_HS200);
+		mmc_host_clk_release(host);
+	}
+	if (err) {
+		pr_warning("%s: tuning execution failed\n",
+			   mmc_hostname(host));
+		goto out;
+	}
+	mmc_card_set_hs200(card);
+
+out:
+	if (err && err != -EOPNOTSUPP)
+		pr_warning("%s: Switch to HS200 mode failed (err:%d)\n",
+				mmc_hostname(host), err);
+	return err;
+}
+
+static int mmc_select_hs400(struct mmc_card *card, u8 *ext_csd)
+{
+	int err = 0;
+	struct mmc_host *host;
+
+	host = card->host;
+
+	if (!(host->caps2 & MMC_CAP2_HS400) ||
+		!(card->ext_csd.card_type & EXT_CSD_CARD_TYPE_HS400)) {
+		err = -EOPNOTSUPP;
+		goto out;
+	}
+
+	/*
+	 * eMMC5.0 spec doesn't allow switching to HS400 mode from
+	 * HS200 mode directly. Hence follow these steps to switch
+	 * to HS400 mode:
+	 *	Enable HS200 mode
+	 *	Enable HighSpeed mode (The clk should be low enough
+	 *		to enable HighSpeed mode) - HS_TIMING is 0x1
+	 *	Enable DDR mode (Set bus width to 8-bit DDR)
+	 *	Enable HS400 mode (Set HS_TIMING to 0x3 and change
+	 *		frequency to <= 200MHz)
+	 *	Perform tuning if required
+	 */
+	mmc_card_set_hs400(card);
+	err = mmc_select_hs200(card, ext_csd);
+	if (err)
+		goto out;
+	mmc_card_clr_hs200(card);
+
+	if ((card->ext_csd.card_type & EXT_CSD_CARD_TYPE_HS400_1_2V)
+	    && (host->caps2 & MMC_CAP2_HS400_1_2V))
+		if (mmc_set_signal_voltage(host, MMC_SIGNAL_VOLTAGE_120, 0))
+				err = mmc_set_signal_voltage(host,
+						MMC_SIGNAL_VOLTAGE_180, 0);
+	/* If fails try again during next card power cycle */
+	if (err)
+		goto out;
+
+	/*
+	 * Lower the clock and adjust the timing to be able
+	 * to switch to HighSpeed mode
+	 */
+	mmc_set_timing(host, MMC_TIMING_LEGACY);
+	mmc_set_clock(host, MMC_HIGH_26_MAX_DTR);
+
+	err = mmc_select_hs(card, ext_csd);
+	if (err)
+		goto out;
+	mmc_card_clr_highspeed(card);
+
+	/* Switch to 8-bit DDR mode */
+	err = mmc_select_hsddr(card, ext_csd);
+	if (err)
+		goto out;
+	mmc_card_clr_ddr_mode(card);
+
+	/*
+	 * In HS400 mode only DDR 8-bit bus width is allowed.
+	 */
+	if (host->ios.bus_width != MMC_BUS_WIDTH_8) {
+		pr_err("%s: failed to switch to 8-bit bus width\n",
+			mmc_hostname(host));
+		goto out;
+	}
+
+	/* Switch to HS400 mode if bus width set successfully */
+	err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
+				 EXT_CSD_HS_TIMING, 3, 0);
+	if (err && err != -EBADMSG) {
+		pr_err("%s: Setting HS_TIMING to HS400 failed (err:%d)\n",
+			mmc_hostname(host), err);
+		goto out;
+	}
+
+	mmc_set_timing(host, MMC_TIMING_MMC_HS400);
+	mmc_set_clock(host, MMC_HS400_MAX_DTR);
+
+	if (host->ops->execute_tuning) {
+		mmc_host_clk_hold(host);
+		err = host->ops->execute_tuning(host,
+				MMC_SEND_TUNING_BLOCK_HS400);
+		mmc_host_clk_release(host);
+	}
+	if (err) {
+		pr_err("%s: tuning execution failed (err:%d)\n",
+			   mmc_hostname(host), err);
+		goto out;
+	}
+	mmc_card_set_hs400(card);
+
+out:
+	if (err && err != -EOPNOTSUPP) {
+		pr_warning("%s: Switch to HS400 mode failed (err:%d)\n",
+				mmc_hostname(host), err);
+		mmc_card_clr_hs400(card);
+	}
+	return err;
+}
+
+int mmc_set_clock_bus_speed(struct mmc_card *card, unsigned long freq)
+{
+	int err;
+
+	if (freq < MMC_HS400_MAX_DTR) {
+		/*
+		 * Lower the clock and adjust the timing to be able
+		 * to switch to HighSpeed mode
+		 */
+		mmc_set_timing(card->host, MMC_TIMING_LEGACY);
+		mmc_set_clock(card->host, MMC_HIGH_26_MAX_DTR);
+
+		err = mmc_select_hs(card, card->cached_ext_csd);
+	} else {
+		err = mmc_select_hs400(card, card->cached_ext_csd);
+	}
+
 	return err;
 }
 
@@ -869,7 +1343,8 @@ static int mmc_change_bus_speed(struct mmc_host *host, unsigned long *freq)
 	}
 
 	if (mmc_card_highspeed(card) || mmc_card_hs200(card)
-			|| mmc_card_ddr_mode(card)) {
+			|| mmc_card_ddr_mode(card)
+			|| mmc_card_hs400(card)) {
 		if (*freq > card->ext_csd.hs_max_dtr)
 			*freq = card->ext_csd.hs_max_dtr;
 	} else if (*freq > card->csd.max_dtr) {
@@ -879,9 +1354,16 @@ static int mmc_change_bus_speed(struct mmc_host *host, unsigned long *freq)
 	if (*freq < host->f_min)
 		*freq = host->f_min;
 
-	mmc_set_clock(host, (unsigned int) (*freq));
+	if (mmc_card_hs400(card)) {
+		err = mmc_set_clock_bus_speed(card, *freq);
+		if (err)
+			goto out;
+	} else {
+		mmc_set_clock(host, (unsigned int) (*freq));
+	}
 
-	if (mmc_card_hs200(card) && card->host->ops->execute_tuning) {
+	if ((mmc_card_hs400(card) || mmc_card_hs200(card))
+		&& card->host->ops->execute_tuning) {
 		/*
 		 * We try to probe host driver for tuning for any
 		 * frequency, it is host driver responsibility to
@@ -892,9 +1374,12 @@ static int mmc_change_bus_speed(struct mmc_host *host, unsigned long *freq)
 				MMC_SEND_TUNING_BLOCK_HS200);
 		mmc_host_clk_release(card->host);
 
-		if (err)
-			pr_warn("%s: %s: tuning execution failed %d\n",
-				   mmc_hostname(card->host), __func__, err);
+		if (err) {
+			pr_warn("%s: %s: tuning execution failed %d. Restoring to previous clock %lu\n",
+				   mmc_hostname(card->host), __func__, err,
+				   host->clk_scaling.curr_freq);
+			mmc_set_clock(host, host->clk_scaling.curr_freq);
+		}
 	}
 out:
 	mmc_release_host(host);
@@ -916,6 +1401,35 @@ static int mmc_reboot_notify(struct notifier_block *notify_block,
 }
 
 /*
+ * Activate highest bus speed mode supported by both host and card.
+ * On failure activate the next supported highest bus speed mode.
+ */
+static int mmc_select_bus_speed(struct mmc_card *card, u8 *ext_csd)
+{
+	int err = 0;
+
+	BUG_ON(!card);
+
+	if (!mmc_select_hs400(card, ext_csd))
+		goto out;
+	if (!mmc_select_hs200(card, ext_csd))
+		goto out;
+	if (!mmc_select_hsddr(card, ext_csd))
+		goto out;
+	if (!mmc_select_hs(card, ext_csd))
+		goto out;
+
+	/*
+	 * Select the default speed and wide bus if supported
+	 */
+	mmc_set_clock(card->host, card->csd.max_dtr);
+	err = mmc_select_bus_width(card, 0, ext_csd);
+
+out:
+	return err;
+}
+
+/*
  * Handle the detection and initialisation of a card.
  *
  * In the case of a resume, "oldcard" will contain the card
@@ -925,9 +1439,8 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 	struct mmc_card *oldcard)
 {
 	struct mmc_card *card;
-	int err, ddr = 0;
+	int err = 0;
 	u32 cid[4];
-	unsigned int max_dtr;
 	u32 rocr;
 	u8 *ext_csd = NULL;
 
@@ -995,6 +1508,7 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 		card->rca = 1;
 		memcpy(card->raw_cid, cid, sizeof(card->raw_cid));
 		card->reboot_notify.notifier_call = mmc_reboot_notify;
+		card->cashe_flush_err_count=0;
 	}
 
 	/*
@@ -1041,6 +1555,7 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 		err = mmc_get_ext_csd(card, &ext_csd);
 		if (err)
 			goto free_card;
+		card->cached_ext_csd = ext_csd;
 		err = mmc_read_ext_csd(card, ext_csd);
 		if (err)
 			goto free_card;
@@ -1129,209 +1644,11 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 	}
 
 	/*
-	 * Activate high speed (if supported)
+	 * Activate highest bus speed mode supported by both host and card.
 	 */
-	if (card->ext_csd.hs_max_dtr != 0) {
-		err = 0;
-		if (card->ext_csd.hs_max_dtr > 52000000 &&
-		    host->caps2 & MMC_CAP2_HS200)
-			err = mmc_select_hs200(card);
-		else if	(host->caps & MMC_CAP_MMC_HIGHSPEED)
-			err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
-					 EXT_CSD_HS_TIMING, 1,
-					 card->ext_csd.generic_cmd6_time);
-
-		if (err && err != -EBADMSG)
-			goto free_card;
-
-		if (err) {
-			pr_warning("%s: switch to highspeed failed\n",
-			       mmc_hostname(card->host));
-			err = 0;
-		} else {
-			if (card->ext_csd.hs_max_dtr > 52000000 &&
-			    host->caps2 & MMC_CAP2_HS200) {
-				mmc_card_set_hs200(card);
-				mmc_set_timing(card->host,
-					       MMC_TIMING_MMC_HS200);
-			} else {
-				mmc_card_set_highspeed(card);
-				mmc_set_timing(card->host, MMC_TIMING_MMC_HS);
-			}
-		}
-	}
-
-	/*
-	 * Compute bus speed.
-	 */
-	max_dtr = (unsigned int)-1;
-
-	if (mmc_card_highspeed(card) || mmc_card_hs200(card)) {
-		if (max_dtr > card->ext_csd.hs_max_dtr)
-			max_dtr = card->ext_csd.hs_max_dtr;
-	} else if (max_dtr > card->csd.max_dtr) {
-		max_dtr = card->csd.max_dtr;
-	}
-
-	mmc_set_clock(host, max_dtr);
-
-	/*
-	 * Indicate DDR mode (if supported).
-	 */
-	if (mmc_card_highspeed(card)) {
-		if ((card->ext_csd.card_type & EXT_CSD_CARD_TYPE_DDR_1_8V)
-			&& ((host->caps & (MMC_CAP_1_8V_DDR |
-			     MMC_CAP_UHS_DDR50))
-				== (MMC_CAP_1_8V_DDR | MMC_CAP_UHS_DDR50)))
-				ddr = MMC_1_8V_DDR_MODE;
-		else if ((card->ext_csd.card_type & EXT_CSD_CARD_TYPE_DDR_1_2V)
-			&& ((host->caps & (MMC_CAP_1_2V_DDR |
-			     MMC_CAP_UHS_DDR50))
-				== (MMC_CAP_1_2V_DDR | MMC_CAP_UHS_DDR50)))
-				ddr = MMC_1_2V_DDR_MODE;
-	}
-
-	/*
-	 * Indicate HS200 SDR mode (if supported).
-	 */
-	if (mmc_card_hs200(card)) {
-		u32 ext_csd_bits;
-		u32 bus_width = card->host->ios.bus_width;
-
-		/*
-		 * For devices supporting HS200 mode, the bus width has
-		 * to be set before executing the tuning function. If
-		 * set before tuning, then device will respond with CRC
-		 * errors for responses on CMD line. So for HS200 the
-		 * sequence will be
-		 * 1. set bus width 4bit / 8 bit (1 bit not supported)
-		 * 2. switch to HS200 mode
-		 * 3. set the clock to > 52Mhz <=200MHz and
-		 * 4. execute tuning for HS200
-		 */
-		if ((host->caps2 & MMC_CAP2_HS200) &&
-		    card->host->ops->execute_tuning) {
-			mmc_host_clk_hold(card->host);
-			err = card->host->ops->execute_tuning(card->host,
-				MMC_SEND_TUNING_BLOCK_HS200);
-			mmc_host_clk_release(card->host);
-		}
-		if (err) {
-			pr_warning("%s: tuning execution failed\n",
-				   mmc_hostname(card->host));
-			goto err;
-		}
-
-		ext_csd_bits = (bus_width == MMC_BUS_WIDTH_8) ?
-				EXT_CSD_BUS_WIDTH_8 : EXT_CSD_BUS_WIDTH_4;
-		err = mmc_select_powerclass(card, ext_csd_bits, ext_csd);
-		if (err)
-			pr_warning("%s: power class selection to bus width %d"
-				   " failed\n", mmc_hostname(card->host),
-				   1 << bus_width);
-	}
-
-	/*
-	 * Activate wide bus and DDR (if supported).
-	 */
-	if (!mmc_card_hs200(card) &&
-	    (card->csd.mmca_vsn >= CSD_SPEC_VER_4) &&
-	    (host->caps & (MMC_CAP_4_BIT_DATA | MMC_CAP_8_BIT_DATA))) {
-		static unsigned ext_csd_bits[][2] = {
-			{ EXT_CSD_BUS_WIDTH_8, EXT_CSD_DDR_BUS_WIDTH_8 },
-			{ EXT_CSD_BUS_WIDTH_4, EXT_CSD_DDR_BUS_WIDTH_4 },
-			{ EXT_CSD_BUS_WIDTH_1, EXT_CSD_BUS_WIDTH_1 },
-		};
-		static unsigned bus_widths[] = {
-			MMC_BUS_WIDTH_8,
-			MMC_BUS_WIDTH_4,
-			MMC_BUS_WIDTH_1
-		};
-		unsigned idx, bus_width = 0;
-
-		if (host->caps & MMC_CAP_8_BIT_DATA)
-			idx = 0;
-		else
-			idx = 1;
-		for (; idx < ARRAY_SIZE(bus_widths); idx++) {
-			bus_width = bus_widths[idx];
-			if (bus_width == MMC_BUS_WIDTH_1)
-				ddr = 0; /* no DDR for 1-bit width */
-			err = mmc_select_powerclass(card, ext_csd_bits[idx][0],
-						    ext_csd);
-			if (err)
-				pr_warning("%s: power class selection to "
-					   "bus width %d failed\n",
-					   mmc_hostname(card->host),
-					   1 << bus_width);
-
-			err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
-					 EXT_CSD_BUS_WIDTH,
-					 ext_csd_bits[idx][0],
-					 card->ext_csd.generic_cmd6_time);
-			if (!err) {
-				mmc_set_bus_width(card->host, bus_width);
-
-				/*
-				 * If controller can't handle bus width test,
-				 * compare ext_csd previously read in 1 bit mode
-				 * against ext_csd at new bus width
-				 */
-				if (!(host->caps & MMC_CAP_BUS_WIDTH_TEST))
-					err = mmc_compare_ext_csds(card,
-						bus_width);
-				else
-					err = mmc_bus_test(card, bus_width);
-				if (!err)
-					break;
-			}
-		}
-
-		if (!err && ddr) {
-			err = mmc_select_powerclass(card, ext_csd_bits[idx][1],
-						    ext_csd);
-			if (err)
-				pr_warning("%s: power class selection to "
-					   "bus width %d ddr %d failed\n",
-					   mmc_hostname(card->host),
-					   1 << bus_width, ddr);
-
-			err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
-					 EXT_CSD_BUS_WIDTH,
-					 ext_csd_bits[idx][1],
-					 card->ext_csd.generic_cmd6_time);
-		}
-		if (err) {
-			pr_warning("%s: switch to bus width %d ddr %d "
-				"failed\n", mmc_hostname(card->host),
-				1 << bus_width, ddr);
-			goto free_card;
-		} else if (ddr) {
-			/*
-			 * eMMC cards can support 3.3V to 1.2V i/o (vccq)
-			 * signaling.
-			 *
-			 * EXT_CSD_CARD_TYPE_DDR_1_8V means 3.3V or 1.8V vccq.
-			 *
-			 * 1.8V vccq at 3.3V core voltage (vcc) is not required
-			 * in the JEDEC spec for DDR.
-			 *
-			 * Do not force change in vccq since we are obviously
-			 * working and no change to vccq is needed.
-			 *
-			 * WARNING: eMMC rules are NOT the same as SD DDR
-			 */
-			if (ddr == MMC_1_2V_DDR_MODE) {
-				err = mmc_set_signal_voltage(host,
-					MMC_SIGNAL_VOLTAGE_120, 0);
-				if (err)
-					goto err;
-			}
-			mmc_card_set_ddr_mode(card);
-			mmc_set_timing(card->host, MMC_TIMING_UHS_DDR50);
-			mmc_set_bus_width(card->host, bus_width);
-		}
-	}
+	err = mmc_select_bus_speed(card, ext_csd);
+	if (err)
+		goto free_card;
 
 	/*
 	 * Enable HPI feature (if supported)
@@ -1353,9 +1670,10 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 	/*
 	 * If cache size is higher than 0, this indicates
 	 * the existence of cache and it can be turned on.
+	 * If HPI is not supported then cache shouldn't be enabled.
 	 */
 	if ((host->caps2 & MMC_CAP2_CACHE_CTRL) &&
-			card->ext_csd.cache_size > 0) {
+	    (card->ext_csd.cache_size > 0) && card->ext_csd.hpi_en) {
 		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
 				EXT_CSD_CACHE_CTRL, 1,
 				card->ext_csd.generic_cmd6_time);
@@ -1435,15 +1753,15 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 	if (!oldcard)
 		host->card = card;
 
-	mmc_free_ext_csd(ext_csd);
+	if (host->card->cid.manfid == 0x11) {
+		memcpy(&host->cached_ios, &host->ios, sizeof(host->cached_ios));
+	}
 	return 0;
 
 free_card:
 	if (!oldcard)
 		mmc_remove_card(card);
 err:
-	mmc_free_ext_csd(ext_csd);
-
 	return err;
 }
 
@@ -1580,10 +1898,47 @@ static int mmc_suspend(struct mmc_host *host)
 		err = mmc_card_sleep(host);
 	else if (!mmc_host_is_spi(host))
 		mmc_deselect_cards(host);
-	host->card->state &= ~(MMC_STATE_HIGHSPEED | MMC_STATE_HIGHSPEED_200);
+
+	if (host->card->cid.manfid != 0x11) {
+		host->card->state &= ~(MMC_STATE_HIGHSPEED | MMC_STATE_HIGHSPEED_200);
+	}
 
 out:
 	mmc_release_host(host);
+	return err;
+}
+
+static int mmc_partial_init(struct mmc_host *host)
+{
+	int err = 0;
+	struct mmc_card *card = host->card;
+	u32 tuning_cmd;
+
+	pr_debug("%s: %s: bw: %d timing: %d clock: %d\n", mmc_hostname(host),
+		__func__,  host->cached_ios.bus_width,  host->cached_ios.timing,
+		host->cached_ios.clock);
+
+	mmc_set_bus_width(host, host->cached_ios.bus_width);
+	mmc_set_timing(host, host->cached_ios.timing);
+	mmc_set_clock(host, host->cached_ios.clock);
+
+	if (host->ops->execute_tuning && (mmc_card_hs200(card) ||
+					  mmc_card_hs400(card))) {
+		mmc_host_clk_hold(host);
+
+		if (mmc_card_hs200(card))
+			tuning_cmd = MMC_SEND_TUNING_BLOCK_HS200;
+		else if (mmc_card_hs400(card))
+			tuning_cmd = MMC_SEND_TUNING_BLOCK_HS400;
+
+		err = host->ops->execute_tuning(host,
+				tuning_cmd);
+
+		mmc_host_clk_release(host);
+	}
+	if (err)
+		pr_err("%s: tuning execution failed\n",
+			   mmc_hostname(host));
 	return err;
 }
 
@@ -1601,7 +1956,20 @@ static int mmc_resume(struct mmc_host *host)
 	BUG_ON(!host->card);
 
 	mmc_claim_host(host);
-	err = mmc_init_card(host, host->ocr, host->card);
+
+	if ((host->caps2 & MMC_CAP2_AWAKE_SUPP) && (host->card->cid.manfid == 0x11)) {
+		err = mmc_card_awake(host);
+		if (err) {
+			pr_err("%s: %s: failed (%d) awake using CMD5\n",
+			       mmc_hostname(host),  __func__, err);
+			err = mmc_init_card(host, host->ocr, host->card);
+		} else {
+			err = mmc_partial_init(host);
+		}
+	} else {
+		err = mmc_init_card(host, host->ocr, host->card);
+	}
+
 	mmc_release_host(host);
 
 	/*

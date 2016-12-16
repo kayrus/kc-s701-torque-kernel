@@ -497,6 +497,7 @@ void __ext4_error(struct super_block *sb, const char *function,
 	printk(KERN_CRIT "EXT4-fs error (device %s): %s:%d: comm %s: %pV\n",
 	       sb->s_id, function, line, current->comm, &vaf);
 	va_end(args);
+	save_error_info(sb, function, line);
 
 	ext4_handle_error(sb);
 }
@@ -943,7 +944,7 @@ static struct inode *ext4_alloc_inode(struct super_block *sb)
 	ei->i_datasync_tid = 0;
 	atomic_set(&ei->i_ioend_count, 0);
 	atomic_set(&ei->i_aiodio_unwritten, 0);
-
+	ei->created_when = jiffies;
 	return &ei->vfs_inode;
 }
 
@@ -1690,7 +1691,7 @@ static inline void ext4_show_quota_options(struct seq_file *seq,
 
 static const char *token2str(int token)
 {
-	static const struct match_token *t;
+	const struct match_token *t;
 
 	for (t = tokens; t->token != Opt_err; t++)
 		if (t->token == token && !strchr(t->pattern, '='))
@@ -4105,6 +4106,7 @@ static void ext4_clear_journal_err(struct super_block *sb,
 		ext4_commit_super(sb, 1);
 
 		jbd2_journal_clear_err(journal);
+		jbd2_journal_update_sb_errno(journal);
 	}
 }
 

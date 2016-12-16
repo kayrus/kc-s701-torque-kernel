@@ -9,6 +9,12 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2012 KYOCERA Corporation
+ * (C) 2013 KYOCERA Corporation
+ * (C) 2014 KYOCERA Corporation
+*/
 
 #define pr_fmt(fmt) "subsys-restart: %s(): " fmt, __func__
 
@@ -32,19 +38,26 @@
 #include <linux/debugfs.h>
 #include <linux/miscdevice.h>
 #include <linux/interrupt.h>
+#include <linux/of_gpio.h>
 
 #include <asm/current.h>
 
 #include <mach/socinfo.h>
 #include <mach/subsystem_notif.h>
 #include <mach/subsystem_restart.h>
-#ifdef CONFIG_LGE_HANDLE_PANIC
-#include <mach/lge_handle_panic.h>
-#endif
+#include <mach/oem_fact.h>
+
 #include "smd_private.h"
 
 static int enable_debug;
 module_param(enable_debug, int, S_IRUGO | S_IWUSR);
+
+static int restart_level_default;
+
+enum {
+	SSR_RAMDUMP_DISABLE = 0,
+	SSR_RAMDUMP_ENABLE  = 1,
+};
 
 /**
  * enum p_subsys_state - state of a subsystem (private)
@@ -216,6 +229,14 @@ int subsys_get_restart_level(struct subsys_device *dev)
 }
 EXPORT_SYMBOL(subsys_get_restart_level);
 
+void subsys_set_restart_level(struct subsys_device *dev, int restart_level)
+{
+	if(dev)
+		dev->restart_level = restart_level;
+	return;
+}
+EXPORT_SYMBOL(subsys_set_restart_level);
+
 static void subsys_set_state(struct subsys_device *subsys,
 			     enum subsys_state state)
 {
@@ -267,6 +288,15 @@ struct workqueue_struct *ssr_wq;
 static LIST_HEAD(restart_log_list);
 static DEFINE_MUTEX(soc_order_reg_lock);
 static DEFINE_MUTEX(restart_log_mutex);
+
+extern void set_kcj_crash_info(void);
+extern void dump_kcj_log(void);
+extern void set_modemlog_info(void);
+extern void set_smem_crash_system_kernel(void);
+extern void set_smem_crash_kind_panic(void);
+extern void set_smem_crash_info_data( const char *pdata );
+
+extern void get_smem_crash_system(char* crash_system, int size);
 
 /* SOC specific restart orders go here */
 
@@ -334,10 +364,10 @@ found:
 	return order;
 }
 
-static int max_restarts;
+static int max_restarts = 2;
 module_param(max_restarts, int, 0644);
 
-static long max_history_time = 3600;
+static long max_history_time = 40;
 module_param(max_history_time, long, 0644);
 
 static void do_epoch_check(struct subsys_device *dev)
@@ -389,10 +419,6 @@ static void do_epoch_check(struct subsys_device *dev)
 	if (time_first && n >= max_restarts_check) {
 		if ((curr_time->tv_sec - time_first->tv_sec) <
 				max_history_time_check)
-#ifdef CONFIG_LGE_HANDLE_PANIC
-			lge_set_magic_subsystem(dev->desc->name,
-					LGE_ERR_SUB_SD);
-#endif
 			panic("Subsystems have crashed %d times in less than "
 				"%ld seconds!", max_restarts_check,
 				max_history_time_check);
@@ -448,13 +474,9 @@ static void subsystem_shutdown(struct subsys_device *dev, void *data)
 	const char *name = dev->desc->name;
 
 	pr_info("[%p]: Shutting down %s\n", current, name);
-	if (dev->desc->shutdown(dev->desc) < 0) {
-#ifdef CONFIG_LGE_HANDLE_PANIC
-		lge_set_magic_subsystem(name, LGE_ERR_SUB_SD);
-#endif
+	if (dev->desc->shutdown(dev->desc) < 0)
 		panic("subsys-restart: [%p]: Failed to shutdown %s!",
 			current, name);
-	}
 	subsys_set_state(dev, SUBSYS_OFFLINE);
 }
 
@@ -475,22 +497,13 @@ static void subsystem_powerup(struct subsys_device *dev, void *data)
 
 	pr_info("[%p]: Powering up %s\n", current, name);
 	init_completion(&dev->err_ready);
-	if (dev->desc->powerup(dev->desc) < 0) {
-#ifdef CONFIG_LGE_HANDLE_PANIC
-		lge_set_magic_subsystem(name, LGE_ERR_SUB_PWR);
-#endif
+	if (dev->desc->powerup(dev->desc) < 0)
 		panic("[%p]: Powerup error: %s!", current, name);
-	}
 
 	ret = wait_for_err_ready(dev);
-	if (ret) {
-#ifdef CONFIG_LGE_HANDLE_PANIC
-		lge_set_magic_subsystem(name, LGE_ERR_SUB_PWR);
-#endif
+	if (ret)
 		panic("[%p]: Timed out waiting for error ready: %s!",
 			current, name);
-	}
-
 	subsys_set_state(dev, SUBSYS_ONLINE);
 }
 
@@ -521,8 +534,10 @@ static int subsys_start(struct subsys_device *subsys)
 	if (ret)
 		return ret;
 
-	if (subsys->desc->is_not_loadable)
+	if (subsys->desc->is_not_loadable) {
+		subsys_set_state(subsys, SUBSYS_ONLINE);
 		return 0;
+	}
 
 	ret = wait_for_err_ready(subsys);
 	if (ret)
@@ -649,6 +664,35 @@ err_out:
 }
 EXPORT_SYMBOL(subsystem_put);
 
+static void subsys_notice_kerr(void)
+{
+	unsigned char crash_system[32];
+	static char *envp[] = {
+		"HOME=/",
+		"TERM=linux",
+		"PATH=/sbin:/vendor/bin:/system/sbin:/system/bin:/system/xbin",
+		NULL
+	};
+
+	char *argv[] = {
+		"/system/vendor/bin/kerr_client",
+		(char*)crash_system,
+		NULL
+	};
+	int ret;
+
+	memset(&crash_system[0], 0x00, sizeof(crash_system));
+	get_smem_crash_system(crash_system, sizeof(crash_system));
+	if (crash_system[0] == 0) {
+		return;
+	}
+	ret = call_usermodehelper(argv[0], argv, envp, UMH_WAIT_PROC);
+	if (ret < 0) {
+		return;
+	}
+	return;
+}
+
 static void subsystem_restart_wq_func(struct work_struct *work)
 {
 	struct subsys_device *dev = container_of(work,
@@ -698,6 +742,12 @@ static void subsystem_restart_wq_func(struct work_struct *work)
 	track->p_state = SUBSYS_RESTARTING;
 	spin_unlock_irqrestore(&track->s_lock, flags);
 
+	subsys_notice_kerr();
+
+	set_modemlog_info();
+	set_kcj_crash_info();
+	dump_kcj_log();
+
 	/* Collect ram dumps for all subsystems in order here */
 	for_each_subsys_device(list, count, NULL, subsystem_ramdump);
 
@@ -740,9 +790,6 @@ static void __subsystem_restart_dev(struct subsys_device *dev)
 			wake_lock(&dev->wake_lock);
 			queue_work(ssr_wq, &dev->work);
 		} else {
-#ifdef CONFIG_LGE_HANDLE_PANIC
-			lge_set_magic_subsystem(name, LGE_ERR_SUB_SD);
-#endif
 			panic("Subsystem %s crashed during SSR!", name);
 		}
 	}
@@ -752,9 +799,6 @@ static void __subsystem_restart_dev(struct subsys_device *dev)
 int subsystem_restart_dev(struct subsys_device *dev)
 {
 	const char *name;
-#ifdef CONFIG_LGE_HANDLE_PANIC
-	int saved_restart_level = dev->restart_level;
-#endif
 
 	if (!get_device(&dev->dev))
 		return -ENODEV;
@@ -777,12 +821,6 @@ int subsystem_restart_dev(struct subsys_device *dev)
 		return -EBUSY;
 	}
 
-#ifdef CONFIG_LGE_HANDLE_PANIC
-	if (lge_is_crash_skipped()) {
-		pr_info("Restart requested intentionally\n");
-		dev->restart_level = RESET_SUBSYS_COUPLED;
-	}
-#endif
 	pr_info("Restart sequence requested for %s, restart_level = %s.\n",
 		name, restart_levels[dev->restart_level]);
 
@@ -790,23 +828,11 @@ int subsystem_restart_dev(struct subsys_device *dev)
 
 	case RESET_SUBSYS_COUPLED:
 		__subsystem_restart_dev(dev);
-#ifdef CONFIG_LGE_HANDLE_PANIC
-		if (lge_is_crash_skipped()) {
-			dev->restart_level = saved_restart_level;
-			lge_clear_crash_skipped();
-		}
-#endif
 		break;
 	case RESET_SOC:
-#ifdef CONFIG_LGE_HANDLE_PANIC
-		lge_set_magic_subsystem(name, LGE_ERR_SUB_RST);
-#endif
 		panic("subsys-restart: Resetting the SoC - %s crashed.", name);
 		break;
 	default:
-#ifdef CONFIG_LGE_HANDLE_PANIC
-		lge_set_magic_subsystem(name, LGE_ERR_SUB_UNK);
-#endif
 		panic("subsys-restart: Unknown restart level!\n");
 		break;
 	}
@@ -995,8 +1021,8 @@ static void subsys_device_release(struct device *dev)
 static irqreturn_t subsys_err_ready_intr_handler(int irq, void *subsys)
 {
 	struct subsys_device *subsys_dev = subsys;
-	pr_info("Error ready interrupt occured for %s\n",
-		 subsys_dev->desc->name);
+	dev_info(subsys_dev->desc->dev,
+		"Subsystem error monitoring/handling services are up\n");
 
 	if (subsys_dev->desc->is_not_loadable)
 		return IRQ_HANDLED;
@@ -1032,6 +1058,129 @@ static void subsys_misc_device_remove(struct subsys_device *subsys_dev)
 	misc_deregister(&subsys_dev->misc_dev);
 }
 
+static int __get_gpio(struct subsys_desc *desc, const char *prop,
+		int *gpio)
+{
+	struct device_node *dnode = desc->dev->of_node;
+	int ret = -ENOENT;
+
+	if (of_find_property(dnode, prop, NULL)) {
+		*gpio = of_get_named_gpio(dnode, prop, 0);
+		ret = *gpio < 0 ? *gpio : 0;
+	}
+
+	return ret;
+}
+
+static int __get_irq(struct subsys_desc *desc, const char *prop,
+		unsigned int *irq)
+{
+	int ret, gpio, irql;
+
+	ret = __get_gpio(desc, prop, &gpio);
+	if (ret)
+		return ret;
+
+	irql = gpio_to_irq(gpio);
+
+	if (irql == -ENOENT)
+		irql = -ENXIO;
+
+	if (irql < 0) {
+		pr_err("[%s]: Error getting IRQ \"%s\"\n", desc->name,
+				prop);
+		return irql;
+	} else {
+		*irq = irql;
+	}
+
+	return 0;
+}
+
+static int subsys_parse_devicetree(struct subsys_desc *desc)
+{
+	int ret;
+	struct platform_device *pdev = container_of(desc->dev,
+					struct platform_device, dev);
+
+	ret = __get_irq(desc, "qcom,gpio-err-fatal", &desc->err_fatal_irq);
+	if (ret && ret != -ENOENT)
+		return ret;
+
+	ret = __get_irq(desc, "qcom,gpio-err-ready", &desc->err_ready_irq);
+	if (ret && ret != -ENOENT)
+		return ret;
+
+	ret = __get_irq(desc, "qcom,gpio-stop-ack", &desc->stop_ack_irq);
+	if (ret && ret != -ENOENT)
+		return ret;
+
+	ret = __get_gpio(desc, "qcom,gpio-force-stop", &desc->force_stop_gpio);
+	if (ret && ret != -ENOENT)
+		return ret;
+
+	desc->wdog_bite_irq = platform_get_irq(pdev, 0);
+	if (desc->wdog_bite_irq < 0)
+		return desc->wdog_bite_irq;
+
+	return 0;
+}
+
+static int subsys_setup_irqs(struct subsys_device *subsys)
+{
+	struct subsys_desc *desc = subsys->desc;
+	int ret;
+
+	if (desc->err_fatal_irq && desc->err_fatal_handler) {
+		ret = devm_request_irq(desc->dev, desc->err_fatal_irq,
+				desc->err_fatal_handler,
+				IRQF_TRIGGER_RISING, desc->name, desc);
+		if (ret < 0) {
+			dev_err(desc->dev, "[%s]: Unable to register error fatal IRQ handler!: %d\n",
+				desc->name, ret);
+			return ret;
+		}
+	}
+
+	if (desc->stop_ack_irq && desc->stop_ack_handler) {
+		ret = devm_request_irq(desc->dev, desc->stop_ack_irq,
+			desc->stop_ack_handler,
+			IRQF_TRIGGER_RISING, desc->name, desc);
+		if (ret < 0) {
+			dev_err(desc->dev, "[%s]: Unable to register stop ack handler!: %d\n",
+				desc->name, ret);
+			return ret;
+		}
+	}
+
+	if (desc->wdog_bite_irq && desc->wdog_bite_handler) {
+		ret = devm_request_irq(desc->dev, desc->wdog_bite_irq,
+			desc->wdog_bite_handler,
+			IRQF_TRIGGER_RISING, desc->name, desc);
+		if (ret < 0) {
+			dev_err(desc->dev, "[%s]: Unable to register wdog bite handler!: %d\n",
+				desc->name, ret);
+			return ret;
+		}
+	}
+
+	if (desc->err_ready_irq) {
+		ret = devm_request_irq(desc->dev,
+					desc->err_ready_irq,
+					subsys_err_ready_intr_handler,
+					IRQF_TRIGGER_RISING,
+					"error_ready_interrupt", subsys);
+		if (ret < 0) {
+			dev_err(desc->dev,
+				"[%s]: Unable to register err ready handler\n",
+				desc->name);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
 struct subsys_device *subsys_register(struct subsys_desc *desc)
 {
 	struct subsys_device *subsys;
@@ -1046,9 +1195,13 @@ struct subsys_device *subsys_register(struct subsys_desc *desc)
 	subsys->dev.parent = desc->dev;
 	subsys->dev.bus = &subsys_bus_type;
 	subsys->dev.release = subsys_device_release;
+	subsys->restart_level = restart_level_default;
 
 	subsys->notify = subsys_notif_add_subsys(desc->name);
 	subsys->restart_order = update_restart_order(subsys);
+	ret = subsys_parse_devicetree(desc);
+	if (ret)
+		goto err_dtree;
 
 	snprintf(subsys->wlname, sizeof(subsys->wlname), "ssr(%s)", desc->name);
 	wake_lock_init(&subsys->wake_lock, WAKE_LOCK_SUSPEND, subsys->wlname);
@@ -1080,19 +1233,9 @@ struct subsys_device *subsys_register(struct subsys_desc *desc)
 		goto err_register;
 	}
 
-	if (subsys->desc->err_ready_irq) {
-		ret = devm_request_irq(&subsys->dev,
-					subsys->desc->err_ready_irq,
-					subsys_err_ready_intr_handler,
-					IRQF_TRIGGER_RISING,
-					"error_ready_interrupt", subsys);
-		if (ret < 0) {
-			dev_err(&subsys->dev,
-				"[%s]: Unable to register err ready handler\n",
-				subsys->desc->name);
-			goto err_misc_device;
-		}
-	}
+	ret = subsys_setup_irqs(subsys);
+	if (ret < 0)
+		goto err_misc_device;
 
 	return subsys;
 
@@ -1105,6 +1248,7 @@ err_debugfs:
 	ida_simple_remove(&subsys_ida, subsys->id);
 err_ida:
 	wake_lock_destroy(&subsys->wake_lock);
+err_dtree:
 	kfree(subsys);
 	return ERR_PTR(ret);
 }
@@ -1139,6 +1283,10 @@ static int subsys_panic(struct device *dev, void *data)
 static int ssr_panic_handler(struct notifier_block *this,
 				unsigned long event, void *ptr)
 {
+	set_smem_crash_system_kernel();
+	set_smem_crash_kind_panic();
+	set_smem_crash_info_data( " " );
+
 	bus_for_each_dev(&subsys_bus_type, NULL, NULL, subsys_panic);
 	return NOTIFY_DONE;
 }
@@ -1185,6 +1333,10 @@ static int __init ssr_init_soc_restart_orders(void)
 static int __init subsys_restart_init(void)
 {
 	int ret;
+	int opt_bit;
+
+	opt_bit = oem_fact_get_option_bit(OEM_FACT_OPTION_ITEM_02, 0x02);
+	restart_level_default = (opt_bit == 0) ? RESET_SUBSYS_COUPLED : RESET_SOC;
 
 	ssr_wq = alloc_workqueue("ssr_wq", WQ_CPU_INTENSIVE, 0);
 	BUG_ON(!ssr_wq);

@@ -1,4 +1,4 @@
-/* Copyright (c) 2002,2007-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2002,2007-2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -73,12 +73,12 @@ static struct kgsl_process_private *
 _get_priv_from_kobj(struct kobject *kobj)
 {
 	struct kgsl_process_private *private;
-	unsigned long name;
+	unsigned int name;
 
 	if (!kobj)
 		return NULL;
 
-	if (sscanf(kobj->name, "%ld", &name) != 1)
+	if (kstrtou32(kobj->name, 0, &name))
 		return NULL;
 
 	list_for_each_entry(private, &kgsl_driver.process_list, list) {
@@ -170,17 +170,32 @@ kgsl_process_uninit_sysfs(struct kgsl_process_private *private)
 	kobject_put(&private->kobj);
 }
 
-void
-kgsl_process_init_sysfs(struct kgsl_process_private *private)
+/**
+ * kgsl_process_init_sysfs() - Initialize and create sysfs files for a process
+ *
+ * @device: Pointer to kgsl device struct
+ * @private: Pointer to the structure for the process
+ *
+ * @returns: 0 on success, error code otherwise
+ *
+ * kgsl_process_init_sysfs() is called at the time of creating the
+ * process struct when a process opens the kgsl device for the first time.
+ * This function creates the sysfs files for the process.
+ */
+int
+kgsl_process_init_sysfs(struct kgsl_device *device,
+		struct kgsl_process_private *private)
 {
 	unsigned char name[16];
-	int i, ret;
+	int i, ret = 0;
 
 	snprintf(name, sizeof(name), "%d", private->pid);
 
-	if (kobject_init_and_add(&private->kobj, &ktype_mem_entry,
-		kgsl_driver.prockobj, name))
-		return;
+	ret = kobject_init_and_add(&private->kobj, &ktype_mem_entry,
+		kgsl_driver.prockobj, name);
+
+	if (ret)
+		return ret;
 
 	for (i = 0; i < ARRAY_SIZE(mem_stats); i++) {
 		/* We need to check the value of sysfs_create_file, but we
@@ -191,6 +206,7 @@ kgsl_process_init_sysfs(struct kgsl_process_private *private)
 		ret = sysfs_create_file(&private->kobj,
 			&mem_stats[i].max_attr.attr);
 	}
+	return ret;
 }
 
 static int kgsl_drv_memstat_show(struct device *dev,
@@ -239,13 +255,13 @@ static int kgsl_drv_full_cache_threshold_store(struct device *dev,
 					 const char *buf, size_t count)
 {
 	int ret;
-	unsigned int thresh;
-	ret = sscanf(buf, "%d", &thresh);
-	if (ret != 1)
-		return count;
+	unsigned int thresh = 0;
+
+	ret = kgsl_sysfs_store(buf, count, &thresh);
+	if (ret != count)
+		return ret;
 
 	kgsl_driver.full_cache_threshold = thresh;
-
 	return count;
 }
 
@@ -400,22 +416,6 @@ static int kgsl_contiguous_vmflags(struct kgsl_memdesc *memdesc)
 }
 
 /*
- * kgsl_page_alloc_unmap_kernel() - Unmap the memory in memdesc
- *
- * @memdesc: The memory descriptor which contains information about the memory
- *
- * Unmaps the memory mapped into kernel address space
- */
-static void kgsl_page_alloc_unmap_kernel(struct kgsl_memdesc *memdesc)
-{
-	if (!memdesc->hostptr)
-		return;
-	vunmap(memdesc->hostptr);
-	kgsl_driver.stats.vmalloc -= memdesc->size;
-	memdesc->hostptr = NULL;
-}
-
-/*
  * kgsl_page_alloc_map_kernel - Map the memory in memdesc to kernel address
  * space
  *
@@ -493,15 +493,6 @@ static void kgsl_ebimem_free(struct kgsl_memdesc *memdesc)
 	free_contiguous_memory_by_paddr(memdesc->physaddr);
 }
 
-static void kgsl_ebimem_unmap_kernel(struct kgsl_memdesc *memdesc)
-{
-	if (!memdesc->hostptr)
-		return;
-
-	iounmap(memdesc->hostptr);
-	memdesc->hostptr = NULL;
-}
-
 static int kgsl_ebimem_map_kernel(struct kgsl_memdesc *memdesc)
 {
 	if (!memdesc->hostptr) {
@@ -528,8 +519,7 @@ struct kgsl_memdesc_ops kgsl_page_alloc_ops = {
 	.free = kgsl_page_alloc_free,
 	.vmflags = kgsl_page_alloc_vmflags,
 	.vmfault = kgsl_page_alloc_vmfault,
-	.map_kernel = kgsl_page_alloc_map_kernel,
-	.unmap_kernel = kgsl_page_alloc_unmap_kernel,
+	.map_kernel_mem = kgsl_page_alloc_map_kernel,
 };
 EXPORT_SYMBOL(kgsl_page_alloc_ops);
 
@@ -537,8 +527,7 @@ static struct kgsl_memdesc_ops kgsl_ebimem_ops = {
 	.free = kgsl_ebimem_free,
 	.vmflags = kgsl_contiguous_vmflags,
 	.vmfault = kgsl_contiguous_vmfault,
-	.map_kernel = kgsl_ebimem_map_kernel,
-	.unmap_kernel = kgsl_ebimem_unmap_kernel,
+	.map_kernel_mem = kgsl_ebimem_map_kernel,
 };
 
 static struct kgsl_memdesc_ops kgsl_coherent_ops = {
@@ -602,7 +591,6 @@ _kgsl_sharedmem_page_alloc(struct kgsl_memdesc *memdesc,
 
 	sglen_alloc = PAGE_ALIGN(size) >> PAGE_SHIFT;
 
-	memdesc->size = size;
 	memdesc->pagetable = pagetable;
 	memdesc->ops = &kgsl_page_alloc_ops;
 
@@ -616,7 +604,7 @@ _kgsl_sharedmem_page_alloc(struct kgsl_memdesc *memdesc,
 
 	/*
 	 * Allocate space to store the list of pages to send to vmap.
-	 * This is an array of pointers so we can t rack 1024 pages per page
+	 * This is an array of pointers so we can track 1024 pages per page
 	 * of allocation.  Since allocations can be as large as the user dares,
 	 * we have to use the kmalloc/vmalloc trick here to make sure we can
 	 * get the memory we need.
@@ -665,6 +653,14 @@ _kgsl_sharedmem_page_alloc(struct kgsl_memdesc *memdesc,
 				continue;
 			}
 
+			/*
+			 * Update sglen and memdesc size,as requested allocation
+			 * not served fully. So that they can be correctly freed
+			 * in kgsl_sharedmem_free().
+			 */
+			memdesc->sglen = sglen;
+			memdesc->size = (size - len);
+
 			KGSL_CORE_ERR(
 				"Out of memory: only allocated %dKB of %dKB requested\n",
 				(size - len) >> 10, size >> 10);
@@ -681,6 +677,7 @@ _kgsl_sharedmem_page_alloc(struct kgsl_memdesc *memdesc,
 	}
 
 	memdesc->sglen = sglen;
+	memdesc->size = size;
 
 	/*
 	 * All memory that goes to the user has to be zeroed out before it gets
@@ -727,15 +724,15 @@ _kgsl_sharedmem_page_alloc(struct kgsl_memdesc *memdesc,
 	outer_cache_range_op_sg(memdesc->sg, memdesc->sglen,
 				KGSL_CACHE_OP_FLUSH);
 
-	KGSL_STATS_ADD(size, kgsl_driver.stats.page_alloc,
-		kgsl_driver.stats.page_alloc_max);
-
 	order = get_order(size);
 
 	if (order < 16)
 		kgsl_driver.stats.histogram[order]++;
 
 done:
+	KGSL_STATS_ADD(memdesc->size, kgsl_driver.stats.page_alloc,
+		kgsl_driver.stats.page_alloc_max);
+
 	if ((memdesc->sglen_alloc * sizeof(struct page *)) > PAGE_SIZE)
 		vfree(pages);
 	else

@@ -1,4 +1,7 @@
 #
+# This software is contributed or developed by KYOCERA Corporation.
+# (C) 2014 KYOCERA Corporation
+#
 # Security configuration
 #
 
@@ -190,6 +193,8 @@ source security/apparmor/Kconfig
 source security/yama/Kconfig
 
 source security/integrity/Kconfig
+
+source security/misc/Kconfig
 
 choice
 	prompt "Default security module"

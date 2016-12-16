@@ -46,6 +46,7 @@ const struct msm_hdmi_mode_timing_info *hdmi_get_supported_mode(u32 mode)
 int hdmi_get_video_id_code(struct msm_hdmi_mode_timing_info *timing_in)
 {
 	int i, vic = -1;
+	struct msm_hdmi_mode_timing_info *supported_timing;
 
 	if (!timing_in) {
 		DEV_ERR("%s: invalid input\n", __func__);
@@ -54,8 +55,7 @@ int hdmi_get_video_id_code(struct msm_hdmi_mode_timing_info *timing_in)
 
 	/* active_low_h, active_low_v and interlaced are not checked against */
 	for (i = 0; i < HDMI_VFRMT_MAX; i++) {
-		struct msm_hdmi_mode_timing_info *supported_timing =
-			&hdmi_supported_video_mode_lut[i];
+		supported_timing = &hdmi_supported_video_mode_lut[i];
 
 		if (!supported_timing->supported)
 			continue;
@@ -84,8 +84,24 @@ int hdmi_get_video_id_code(struct msm_hdmi_mode_timing_info *timing_in)
 		break;
 	}
 
-	if (vic < 0)
-		DEV_ERR("%s: timing asked is not yet supported\n", __func__);
+	if (vic < 0) {
+		for (i = 0; i < HDMI_VFRMT_MAX; i++) {
+			supported_timing = &hdmi_supported_video_mode_lut[i];
+			if (!supported_timing->supported)
+				continue;
+			if (timing_in->active_h != supported_timing->active_h)
+				continue;
+			if (timing_in->active_v != supported_timing->active_v)
+				continue;
+			vic = (int)supported_timing->video_format;
+			break;
+		}
+	}
+
+	if (vic < 0) {
+		DEV_ERR("%s: timing is not supported h=%d v=%d\n",
+			__func__, timing_in->active_h, timing_in->active_v);
+	}
 
 exit:
 	DEV_DBG("%s: vic = %d timing = %s\n", __func__, vic,
@@ -123,30 +139,30 @@ const char *hdmi_get_single_video_3d_fmt_2string(u32 format)
 	return "";
 } /* hdmi_get_single_video_3d_fmt_2string */
 
-ssize_t hdmi_get_video_3d_fmt_2string(u32 format, char *buf)
+ssize_t hdmi_get_video_3d_fmt_2string(u32 format, char *buf, u32 size)
 {
 	ssize_t ret, len = 0;
-	ret = snprintf(buf, PAGE_SIZE, "%s",
+	ret = scnprintf(buf, size, "%s",
 		hdmi_get_single_video_3d_fmt_2string(
 			format & FRAME_PACKING));
 	len += ret;
 
 	if (len && (format & TOP_AND_BOTTOM))
-		ret = snprintf(buf + len, PAGE_SIZE, ":%s",
+		ret = scnprintf(buf + len, size - len, ":%s",
 			hdmi_get_single_video_3d_fmt_2string(
 				format & TOP_AND_BOTTOM));
 	else
-		ret = snprintf(buf + len, PAGE_SIZE, "%s",
+		ret = scnprintf(buf + len, size - len, "%s",
 			hdmi_get_single_video_3d_fmt_2string(
 				format & TOP_AND_BOTTOM));
 	len += ret;
 
 	if (len && (format & SIDE_BY_SIDE_HALF))
-		ret = snprintf(buf + len, PAGE_SIZE, ":%s",
+		ret = scnprintf(buf + len, size - len, ":%s",
 			hdmi_get_single_video_3d_fmt_2string(
 				format & SIDE_BY_SIDE_HALF));
 	else
-		ret = snprintf(buf + len, PAGE_SIZE, "%s",
+		ret = scnprintf(buf + len, size - len, "%s",
 			hdmi_get_single_video_3d_fmt_2string(
 				format & SIDE_BY_SIDE_HALF));
 	len += ret;
@@ -296,7 +312,7 @@ again:
 	INIT_COMPLETION(ddc_ctrl->ddc_sw_done);
 	DSS_REG_W_ND(ddc_ctrl->io, HDMI_DDC_CTRL, BIT(0) | BIT(20));
 
-	time_out_count = wait_for_completion_interruptible_timeout(
+	time_out_count = wait_for_completion_timeout(
 		&ddc_ctrl->ddc_sw_done, HZ/2);
 	DSS_REG_W_ND(ddc_ctrl->io, HDMI_DDC_INT_CTRL, BIT(1));
 	if (!time_out_count) {
@@ -547,7 +563,7 @@ again:
 	INIT_COMPLETION(ddc_ctrl->ddc_sw_done);
 	DSS_REG_W_ND(ddc_ctrl->io, HDMI_DDC_CTRL, BIT(0) | BIT(21));
 
-	time_out_count = wait_for_completion_interruptible_timeout(
+	time_out_count = wait_for_completion_timeout(
 		&ddc_ctrl->ddc_sw_done, HZ/2);
 
 	reg_val = DSS_REG_R(ddc_ctrl->io, HDMI_DDC_INT_CTRL);
@@ -721,7 +737,7 @@ again:
 	INIT_COMPLETION(ddc_ctrl->ddc_sw_done);
 	DSS_REG_W_ND(ddc_ctrl->io, HDMI_DDC_CTRL, BIT(0) | BIT(20));
 
-	time_out_count = wait_for_completion_interruptible_timeout(
+	time_out_count = wait_for_completion_timeout(
 		&ddc_ctrl->ddc_sw_done, HZ/2);
 
 	reg_val = DSS_REG_R(ddc_ctrl->io, HDMI_DDC_INT_CTRL);

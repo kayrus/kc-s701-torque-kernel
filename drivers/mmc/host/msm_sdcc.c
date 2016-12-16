@@ -79,12 +79,6 @@
 #define MSM_MMC_BUS_VOTING_DELAY	200 /* msecs */
 #define INVALID_TUNING_PHASE		-1
 
-#if defined(CONFIG_WIFI_CONTROL_FUNC)
-extern int wcf_status_register(
-		void (*cb)(int card_present, void *dev), void *dev);
-extern unsigned int wcf_status(struct device *dev);
-#endif
-
 #if defined(CONFIG_DEBUG_FS)
 static void msmsdcc_dbg_createhost(struct msmsdcc_host *);
 static struct dentry *debugfs_dir;
@@ -522,8 +516,6 @@ msmsdcc_request_end(struct msmsdcc_host *host, struct mmc_request *mrq)
 
 	if (mrq->data)
 		mrq->data->bytes_xfered = host->curr.data_xfered;
-	if (mrq->cmd->error == -ETIMEDOUT)
-		mdelay(5);
 
 	msmsdcc_reset_dpsm(host);
 
@@ -4325,56 +4317,6 @@ exit:
 	return rc;
 }
 
-/*
- * Work around of the unavailability of a power_reset functionality in SD cards
- * by turning the OFF & back ON the regulators supplying the SD card.
- */
-void msmsdcc_hw_reset(struct mmc_host *mmc)
-{
-	struct mmc_card *card = mmc->card;
-	struct msmsdcc_host *host = mmc_priv(mmc);
-	int rc;
-
-	/* Write-protection bits would be lost on a hardware reset in emmc */
-	if (!card || !mmc_card_sd(card))
-		return;
-
-	pr_debug("%s: Starting h/w reset\n", mmc_hostname(host->mmc));
-
-	if (host->plat->translate_vdd || host->plat->vreg_data) {
-
-		/* Disable the regulators */
-		if (host->plat->translate_vdd)
-			rc = host->plat->translate_vdd(mmc_dev(mmc), 0);
-		else if (host->plat->vreg_data)
-			rc = msmsdcc_setup_vreg(host, false, false);
-
-		if (rc) {
-			pr_err("%s: Failed to disable voltage regulator\n",
-				mmc_hostname(host->mmc));
-			BUG_ON(rc);
-		}
-
-		/* 10ms delay for supply to reach the desired voltage level */
-		usleep_range(10000, 12000);
-
-		/* Enable the regulators */
-		if (host->plat->translate_vdd)
-			rc = host->plat->translate_vdd(mmc_dev(mmc), 1);
-		else if (host->plat->vreg_data)
-			rc = msmsdcc_setup_vreg(host, true, false);
-
-		if (rc) {
-			pr_err("%s: Failed to enable voltage regulator\n",
-				mmc_hostname(host->mmc));
-			BUG_ON(rc);
-		}
-
-		/* 10ms delay for supply to reach the desired voltage level */
-		usleep_range(10000, 12000);
-	}
-}
-
 /**
  *	msmsdcc_stop_request - stops ongoing request
  *	@mmc: MMC host, running the request
@@ -4482,7 +4424,6 @@ static const struct mmc_host_ops msmsdcc_ops = {
 	.enable_sdio_irq = msmsdcc_enable_sdio_irq,
 	.start_signal_voltage_switch = msmsdcc_switch_io_voltage,
 	.execute_tuning = msmsdcc_execute_tuning,
-	.hw_reset = msmsdcc_hw_reset,
 	.stop_request = msmsdcc_stop_request,
 	.get_xfer_remain = msmsdcc_get_xfer_remain,
 	.notify_load = msmsdcc_notify_load,
@@ -5841,15 +5782,9 @@ static struct mmc_platform_data *msmsdcc_populate_pdata(struct device *dev)
 		goto err;
 	}
 
-	/*
-	 * Some devices might not use vdd. if qcom,not-use-vdd exists
-	 * skip the parse the vdd
-	 */
-	if (of_property_read_bool(np, "qcom,not-use-vdd") != true) {
-		if (msmsdcc_dt_parse_vreg_info(dev,
-				&pdata->vreg_data->vdd_data, "vdd"))
-			goto err;
-	}
+	if (msmsdcc_dt_parse_vreg_info(dev,
+			&pdata->vreg_data->vdd_data, "vdd"))
+		goto err;
 
 	if (msmsdcc_dt_parse_vreg_info(dev,
 			&pdata->vreg_data->vdd_io_data, "vdd-io"))
@@ -5906,8 +5841,6 @@ static struct mmc_platform_data *msmsdcc_populate_pdata(struct device *dev)
 		pdata->nonremovable = true;
 	if (of_get_property(np, "qcom,disable-cmd23", NULL))
 		pdata->disable_cmd23 = true;
-	if (of_get_property(np, "qcom,wifi-control-func", NULL))
-		pdata->wifi_control_func = true;
 	of_property_read_u32(np, "qcom,dat1-mpm-int",
 					&pdata->mpm_sdiowakeup_int);
 
@@ -6130,6 +6063,10 @@ msmsdcc_probe(struct platform_device *pdev)
 
 	msmsdcc_msm_bus_cancel_work_and_set_vote(host, &mmc->ios);
 
+	/* Disable SDHCi mode if supported */
+	if (is_sdhci_supported(host))
+		writel_relaxed(0, (host->base + MCI_CORE_HC_MODE));
+
 	/* Apply Hard reset to SDCC to put it in power on default state */
 	msmsdcc_hard_reset(host);
 
@@ -6175,7 +6112,6 @@ msmsdcc_probe(struct platform_device *pdev)
 	mmc->caps |= plat->mmc_bus_width;
 	mmc->caps |= MMC_CAP_MMC_HIGHSPEED | MMC_CAP_SD_HIGHSPEED;
 	mmc->caps |= MMC_CAP_WAIT_WHILE_BUSY | MMC_CAP_ERASE;
-	mmc->caps |= MMC_CAP_HW_RESET;
 	/*
 	 * If we send the CMD23 before multi block write/read command
 	 * then we need not to send CMD12 at the end of the transfer.
@@ -6286,16 +6222,6 @@ msmsdcc_probe(struct platform_device *pdev)
 	/*
 	 * Setup card detect change
 	 */
-
-#if defined(CONFIG_WIFI_CONTROL_FUNC)
-	pr_info("%s: id %d, nonremovable %d\n", mmc_hostname(mmc),
-			host->pdev->id, plat->nonremovable);
-	if (plat->wifi_control_func) {
-		plat->register_status_notify = wcf_status_register;
-		plat->status = wcf_status;
-		mmc->pm_flags |= MMC_PM_IGNORE_PM_NOTIFY;
-	}
-#endif
 
 	if (!plat->status_gpio)
 		plat->status_gpio = -ENOENT;
@@ -6547,7 +6473,7 @@ static void msmsdcc_remove_debugfs(struct msmsdcc_host *host)
 	host->debugfs_host_dir = NULL;
 }
 #else
-static void msmsdcc_remove_debugfs(msmsdcc_host *host) {}
+static void msmsdcc_remove_debugfs(struct msmsdcc_host *host) {}
 #endif
 
 static int msmsdcc_remove(struct platform_device *pdev)
@@ -6754,7 +6680,7 @@ static inline void msmsdcc_ungate_clock(struct msmsdcc_host *host)
 }
 #endif
 
-#if CONFIG_DEBUG_FS
+#ifdef CONFIG_DEBUG_FS
 static void msmsdcc_print_pm_stats(struct msmsdcc_host *host, ktime_t start,
 				   const char *func, int err)
 {
@@ -7036,7 +6962,7 @@ static const struct dev_pm_ops msmsdcc_dev_pm_ops = {
 
 static const struct of_device_id msmsdcc_dt_match[] = {
 	{.compatible = "qcom,msm-sdcc"},
-
+	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, msmsdcc_dt_match);
 

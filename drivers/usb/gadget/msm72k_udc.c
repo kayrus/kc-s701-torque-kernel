@@ -5,6 +5,8 @@
  * Copyright (c) 2009-2013, The Linux Foundation. All rights reserved.
  * Author: Mike Lockwood <lockwood@android.com>
  *         Brian Swetland <swetland@google.com>
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -2513,7 +2515,14 @@ static int msm72k_udc_vbus_draw(struct usb_gadget *_gadget, unsigned mA)
 
 	spin_lock_irqsave(&ui->lock, flags);
 	ui->b_max_pow = mA;
+#ifdef FEATURE_KYOCERA_DATA_QCOM
 	ui->flags = USB_FLAG_CONFIGURED;
+#else  /* FEATURE_KYOCERA_DATA_QCOM */
+	if(ui->flags != USB_FLAG_SUSPEND)
+	{
+		ui->flags = USB_FLAG_CONFIGURED;
+	}
+#endif /* FEATURE_KYOCERA_DATA_QCOM */
 	spin_unlock_irqrestore(&ui->lock, flags);
 
 	schedule_work(&ui->work);

@@ -9,6 +9,12 @@
  * under the terms of the GNU General Public License version 2 as published by
  * the Free Software Foundation.
  */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2012 KYOCERA Corporation
+ * (C) 2013 KYOCERA Corporation
+ * (C) 2014 KYOCERA Corporation
+ */
 
 #define pr_fmt(fmt) KBUILD_BASENAME ": " fmt
 
@@ -31,6 +37,107 @@
 MODULE_AUTHOR("Vojtech Pavlik <vojtech@suse.cz>");
 MODULE_DESCRIPTION("Input core");
 MODULE_LICENSE("GPL");
+
+#define DEBUG_LOGCAPTURE
+#ifdef DEBUG_LOGCAPTURE
+
+#define DUMPLOG_TIMER 30
+#define LOG_KEY_NONE  0x0
+#define LOG_KEY_VOLDN 0x02
+#define LOG_KEY_VOLUP 0x01
+#define LOG_KEY_ON    (LOG_KEY_VOLDN | LOG_KEY_VOLUP)
+#if 0
+#define INPUT_LOG_PRINT(fmt, ...) printk(KERN_DEBUG fmt, ##__VA_ARGS__)
+#else
+#define INPUT_LOG_PRINT(fmt, ...)
+#endif
+
+static struct hrtimer logcapture_timer;
+
+static void check_logcapture(struct input_dev* dev,
+				unsigned int code, int value)
+{
+	static int logcapture_status = LOG_KEY_NONE;
+
+	if (value == 0) {
+		if (code == KEY_VOLUMEUP) {
+			INPUT_LOG_PRINT("logcapture status=0x%x dev=%x \n",
+					logcapture_status,(unsigned int)dev);
+			logcapture_status &= ~LOG_KEY_VOLUP;
+			INPUT_LOG_PRINT("logcapture timer cancel\n");
+			hrtimer_cancel(&logcapture_timer);
+			INPUT_LOG_PRINT("logcapture after status=0x%x\n",
+					logcapture_status);
+		}else if (code == KEY_VOLUMEDOWN) {
+			INPUT_LOG_PRINT("logcapture status=0x%x dev=%x \n",
+					logcapture_status,(unsigned int)dev);
+			logcapture_status &= ~LOG_KEY_VOLDN;
+			INPUT_LOG_PRINT("logcapture timer cancel\n");
+			hrtimer_cancel(&logcapture_timer);
+			INPUT_LOG_PRINT("logcapture after status=0x%x\n",
+					logcapture_status);
+		}
+	} else {
+		if (code == KEY_VOLUMEUP) {
+			INPUT_LOG_PRINT("logcapture status=0x%x dev=%x \n",
+					logcapture_status,(unsigned int)dev);
+			logcapture_status |= LOG_KEY_VOLUP;
+			if (logcapture_status == LOG_KEY_ON) {
+				INPUT_LOG_PRINT("logcapture timer start\n");
+				hrtimer_start(&logcapture_timer,
+						ktime_set(DUMPLOG_TIMER,0),
+						HRTIMER_MODE_REL);
+			}
+			INPUT_LOG_PRINT("logcapture after status=0x%x\n",
+					logcapture_status);
+		} else if (code == KEY_VOLUMEDOWN) {
+			INPUT_LOG_PRINT("logcapture status=0x%x dev=%x \n",
+					logcapture_status,(unsigned int)dev);
+			logcapture_status |= LOG_KEY_VOLDN;
+			if (logcapture_status == LOG_KEY_ON) {
+				INPUT_LOG_PRINT("logcapture timer start\n");
+				hrtimer_start(&(logcapture_timer),
+						ktime_set(DUMPLOG_TIMER,0),
+						HRTIMER_MODE_REL);
+			}
+			INPUT_LOG_PRINT("logcapture after status=0x%x\n",
+						logcapture_status);
+		}
+	}
+}
+
+static int execute_logcapture(void)
+{
+	static char *envp[] = {
+		"HOME=/",
+		"TERM=linux",
+		"PATH=/sbin:/vendor/bin:/system/sbin:/system/bin:/system/xbin",
+		NULL
+	};
+
+	static char *argv[] = {
+		"/system/bin/start",
+		"logcapture",
+		NULL
+	};
+	int ret;
+
+	ret = call_usermodehelper(argv[0], argv, envp, UMH_NO_WAIT);
+	INPUT_LOG_PRINT("++ %s: after input call_usermodehelper() (ret=%d).\n",
+	                                __func__, ret);
+	if (ret < 0) {
+	        return ret;
+	}
+	return 0;
+}
+
+static enum hrtimer_restart logcapture_timer_func(struct hrtimer *timer)
+{
+	INPUT_LOG_PRINT("logcapture_timer_func start\n");
+	execute_logcapture();
+	return HRTIMER_NORESTART;
+}
+#endif
 
 #define INPUT_DEVICES	256
 
@@ -223,8 +330,6 @@ static void input_handle_event(struct input_dev *dev,
 	case EV_SYN:
 		switch (code) {
 		case SYN_CONFIG:
-		case SYN_TIME_SEC:
-		case SYN_TIME_NSEC:
 			disposition = INPUT_PASS_TO_ALL;
 			break;
 
@@ -252,6 +357,9 @@ static void input_handle_event(struct input_dev *dev,
 				else
 					input_stop_autorepeat(dev);
 			}
+#ifdef DEBUG_LOGCAPTURE
+			check_logcapture(dev,code,value);
+#endif
 
 			disposition = INPUT_PASS_TO_HANDLERS;
 		}
@@ -517,14 +625,11 @@ int input_open_device(struct input_handle *handle)
 
 	handle->open++;
 
-	dev->users_private++;
-	if (!dev->disabled && !dev->users++ && dev->open)
+	if (!dev->users++ && dev->open)
 		retval = dev->open(dev);
 
 	if (retval) {
-		dev->users_private--;
-		if (!dev->disabled)
-			dev->users--;
+		dev->users--;
 		if (!--handle->open) {
 			/*
 			 * Make sure we are not delivering any more events
@@ -572,8 +677,7 @@ void input_close_device(struct input_handle *handle)
 
 	__input_release_device(handle);
 
-	--dev->users_private;
-	if (!dev->disabled && !--dev->users && dev->close)
+	if (!--dev->users && dev->close)
 		dev->close(dev);
 
 	if (!--handle->open) {
@@ -589,50 +693,6 @@ void input_close_device(struct input_handle *handle)
 }
 EXPORT_SYMBOL(input_close_device);
 
-static int input_enable_device(struct input_dev *dev)
-{
-	int retval;
-
-	retval = mutex_lock_interruptible(&dev->mutex);
-	if (retval)
-		return retval;
-
-	if (!dev->disabled)
-		goto out;
-
-	if (dev->users_private && dev->open) {
-		retval = dev->open(dev);
-		if (retval)
-			goto out;
-	}
-	dev->users = dev->users_private;
-	dev->disabled = false;
-
-out:
-	mutex_unlock(&dev->mutex);
-
-	return retval;
-}
-
-static int input_disable_device(struct input_dev *dev)
-{
-	int retval;
-
-	retval = mutex_lock_interruptible(&dev->mutex);
-	if (retval)
-		return retval;
-
-	if (!dev->disabled) {
-		dev->disabled = true;
-		if (dev->users && dev->close)
-			dev->close(dev);
-		dev->users = 0;
-	}
-
-	mutex_unlock(&dev->mutex);
-	return 0;
-}
-
 /*
  * Simulate keyup events for all keys that are marked as pressed.
  * The function must be called with dev->event_lock held.
@@ -643,6 +703,18 @@ static void input_dev_release_keys(struct input_dev *dev)
 
 	if (is_event_supported(EV_KEY, dev->evbit, EV_MAX)) {
 		for (code = 0; code <= KEY_MAX; code++) {
+#ifdef CONFIG_KYOCERA_MSND
+			if( (code == KEY_MEDIA) || (code == BTN_1) ||
+				(code == BTN_2) || (code == BTN_3) || (code == BTN_4) ||
+				(code == BTN_5) || (code == BTN_6) || (code == BTN_7) )
+			{
+				 continue;
+			}
+#endif
+			if(code == KEY_CAMERA)
+			{
+				 continue;
+			}
 			if (is_event_supported(code, dev->keybit, KEY_MAX) &&
 			    __test_and_clear_bit(code, dev->key)) {
 				input_pass_event(dev, EV_KEY, code, 0);
@@ -1341,46 +1413,12 @@ static ssize_t input_dev_show_properties(struct device *dev,
 }
 static DEVICE_ATTR(properties, S_IRUGO, input_dev_show_properties, NULL);
 
-static ssize_t input_dev_show_enabled(struct device *dev,
-					 struct device_attribute *attr,
-					 char *buf)
-{
-	struct input_dev *input_dev = to_input_dev(dev);
-	return scnprintf(buf, PAGE_SIZE, "%d\n", !input_dev->disabled);
-}
-
-static ssize_t input_dev_store_enabled(struct device *dev,
-				       struct device_attribute *attr,
-				       const char *buf, size_t size)
-{
-	int ret;
-	bool enable;
-	struct input_dev *input_dev = to_input_dev(dev);
-
-	ret = strtobool(buf, &enable);
-	if (ret)
-		return ret;
-
-	if (enable)
-		ret = input_enable_device(input_dev);
-	else
-		ret = input_disable_device(input_dev);
-	if (ret)
-		return ret;
-
-	return size;
-}
-
-static DEVICE_ATTR(enabled, S_IRUGO | S_IWUSR,
-		   input_dev_show_enabled, input_dev_store_enabled);
-
 static struct attribute *input_dev_attrs[] = {
 	&dev_attr_name.attr,
 	&dev_attr_phys.attr,
 	&dev_attr_uniq.attr,
 	&dev_attr_modalias.attr,
 	&dev_attr_properties.attr,
-	&dev_attr_enabled.attr,
 	NULL
 };
 
@@ -1658,9 +1696,11 @@ void input_reset_device(struct input_dev *dev)
 		 * Keys that have been pressed at suspend time are unlikely
 		 * to be still pressed when we resume.
 		 */
-		spin_lock_irq(&dev->event_lock);
-		input_dev_release_keys(dev);
-		spin_unlock_irq(&dev->event_lock);
+		if (!test_bit(INPUT_PROP_NO_DUMMY_RELEASE, dev->propbit)) {
+			spin_lock_irq(&dev->event_lock);
+			input_dev_release_keys(dev);
+			spin_unlock_irq(&dev->event_lock);
+		}
 	}
 
 	mutex_unlock(&dev->mutex);
@@ -2239,6 +2279,10 @@ static int __init input_init(void)
 		pr_err("unable to register char major %d", INPUT_MAJOR);
 		goto fail2;
 	}
+#ifdef DEBUG_LOGCAPTURE
+	hrtimer_init(&(logcapture_timer), CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	logcapture_timer.function = logcapture_timer_func;
+#endif
 
 	return 0;
 
@@ -2249,6 +2293,9 @@ static int __init input_init(void)
 
 static void __exit input_exit(void)
 {
+#ifdef DEBUG_LOGCAPTURE
+	hrtimer_cancel(&(logcapture_timer));
+#endif
 	input_proc_exit();
 	unregister_chrdev(INPUT_MAJOR, "input");
 	class_unregister(&input_class);

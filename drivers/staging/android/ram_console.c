@@ -12,6 +12,10 @@
  * GNU General Public License for more details.
  *
  */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
+*/
 
 #include <linux/console.h>
 #include <linux/init.h>
@@ -100,6 +104,11 @@ static ssize_t ram_console_read_old(struct file *file, char __user *buf,
 	const char *old_log = persistent_ram_old(prz);
 	char *str;
 	int ret;
+
+#if 0
+	if (dmesg_restrict && !capable(CAP_SYSLOG))
+		return -EPERM;
+#endif
 
 	/* Main last_kmsg log */
 	if (pos < old_log_size) {

@@ -10,6 +10,11 @@
  * GNU General Public License for more details.
  *
  */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C)2013 KYOCERA Corporation
+ * (C)2014 KYOCERA Corporation
+ */
 #include "msm_sensor.h"
 #define OV8825_SENSOR_NAME "ov8825"
 DEFINE_MSM_MUTEX(ov8825_mut);
@@ -17,12 +22,7 @@ DEFINE_MSM_MUTEX(ov8825_mut);
 static struct msm_sensor_ctrl_t ov8825_s_ctrl;
 
 static struct msm_sensor_power_setting ov8825_power_setting[] = {
-	{
-		.seq_type = SENSOR_VREG,
-		.seq_val = CAM_VIO,
-		.config_val = 0,
-		.delay = 5,
-	},
+	/* AVDD(L19) ON -> 5ms wait */
 	{
 		.seq_type = SENSOR_VREG,
 		.seq_val = CAM_VANA,
@@ -30,52 +30,22 @@ static struct msm_sensor_power_setting ov8825_power_setting[] = {
 		.delay = 5,
 	},
 	{
-		.seq_type = SENSOR_VREG,
-		.seq_val = CAM_VDIG,
-		.config_val = 0,
-		.delay = 5,
-	},
-	{
-		.seq_type = SENSOR_VREG,
-		.seq_val = CAM_VAF,
-		.config_val = 0,
-		.delay = 15,
-	},
-	{
-		.seq_type = SENSOR_GPIO,
-		.seq_val = SENSOR_GPIO_STANDBY,
-		.config_val = GPIO_OUT_LOW,
-		.delay = 15,
-	},
-	{
-		.seq_type = SENSOR_GPIO,
-		.seq_val = SENSOR_GPIO_RESET,
-		.config_val = GPIO_OUT_LOW,
-		.delay = 40,
-	},
-	{
 		.seq_type = SENSOR_GPIO,
 		.seq_val = SENSOR_GPIO_STANDBY,
 		.config_val = GPIO_OUT_HIGH,
-		.delay = 40,
-	},
-	{
-		.seq_type = SENSOR_GPIO,
-		.seq_val = SENSOR_GPIO_RESET,
-		.config_val = GPIO_OUT_HIGH,
-		.delay = 40,
+		.delay = 0,
 	},
 	{
 		.seq_type = SENSOR_CLK,
 		.seq_val = SENSOR_CAM_MCLK,
 		.config_val = 24000000,
-		.delay = 5,
+		.delay = 1,
 	},
 	{
-		.seq_type = SENSOR_I2C_MUX,
-		.seq_val = 0,
-		.config_val = 0,
-		.delay = 0,
+		.seq_type = SENSOR_GPIO,
+		.seq_val = SENSOR_GPIO_RESET,
+		.config_val = GPIO_OUT_HIGH,
+		.delay = 30,
 	},
 };
 

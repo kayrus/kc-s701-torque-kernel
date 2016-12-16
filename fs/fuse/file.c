@@ -692,6 +692,8 @@ static int fuse_readpages_fill(void *_data, struct page *page)
 		lock_page(newpage);
 		put_page(newpage);
 
+		lru_cache_add_file(newpage);
+
 		/* finally release the old page and swap pointers */
 		unlock_page(oldpage);
 		page_cache_release(oldpage);
@@ -1734,7 +1736,7 @@ static int fuse_verify_ioctl_iov(struct iovec *iov, size_t count)
 	size_t n;
 	u32 max = FUSE_MAX_PAGES_PER_REQ << PAGE_SHIFT;
 
-	for (n = 0; n < count; n++) {
+	for (n = 0; n < count; n++, iov++) {
 		if (iov->iov_len > (size_t) max)
 			return -ENOMEM;
 		max -= iov->iov_len;

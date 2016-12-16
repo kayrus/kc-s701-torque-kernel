@@ -7,6 +7,10 @@
  * This file is released under the GPLv2
  *
  */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2013 KYOCERA Corporation
+ */
 
 #include <linux/export.h>
 #include <linux/kobject.h>
@@ -510,6 +514,7 @@ static ssize_t autosleep_store(struct kobject *kobj,
 	suspend_state_t state = decode_state(buf, n);
 	int error;
 
+	pr_info("checkpoint: %s: state=%d\n", __func__, state);
 	if (state == PM_SUSPEND_ON
 	    && strcmp(buf, "off") && strcmp(buf, "off\n"))
 		return -EINVAL;

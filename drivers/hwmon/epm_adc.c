@@ -94,6 +94,14 @@
 #define EPM_PSOC_CLEAR_BUFFER_RESPONSE_CMD		0x1e
 #define EPM_PSOC_SET_VADC_REFERENCE_CMD			0x1f
 #define EPM_PSOC_SET_VADC_REFERENCE_RESPONSE_CMD	0x20
+#define EPM_PSOC_PAUSE_CONVERSION			0x35
+#define EPM_PSOC_PAUSE_CONVERSION_RSP_CMD		0x36
+#define EPM_PSOC_UNPAUSE_CONVERSION			0x37
+#define EPM_PSOC_UNPAUSE_CONVERSION_RSP_CMD		0x38
+#define EPM_PSOC_GPIO_BUFFER_REQUEST_CMD		0x4f
+#define EPM_PSOC_GPIO_BUFFER_REQUEST_RESPONSE_CMD	0x50
+#define EPM_PSOC_GET_GPIO_BUFFER_CMD			0x51
+#define EPM_PSOC_GET_GPIO_BUFFER_RESPONSE_CMD		0x52
 
 #define EPM_PSOC_GLOBAL_ENABLE				81
 #define EPM_PSOC_VREF_VOLTAGE				2048
@@ -767,6 +775,80 @@ static int epm_marker2_release(void)
 	return 0;
 }
 
+static int epm_psoc_pause_conversion(struct epm_adc_drv *epm_adc)
+{
+	struct spi_message m;
+	struct spi_transfer t;
+	char tx_buf[2], rx_buf[2];
+	int rc = 0;
+
+	spi_setup(epm_adc->epm_spi_client);
+
+	memset(&t, 0, sizeof t);
+	memset(tx_buf, 0, sizeof tx_buf);
+	memset(rx_buf, 0, sizeof tx_buf);
+	t.tx_buf = tx_buf;
+	t.rx_buf = rx_buf;
+	spi_message_init(&m);
+	spi_message_add_tail(&t, &m);
+
+	tx_buf[0] = EPM_PSOC_PAUSE_CONVERSION;
+
+	t.len = sizeof(tx_buf);
+	t.bits_per_word = EPM_ADC_ADS_SPI_BITS_PER_WORD;
+
+	rc = spi_sync(epm_adc->epm_spi_client, &m);
+	if (rc) {
+		pr_err("spi sync err with %d\n", rc);
+		return rc;
+	}
+
+	rc = spi_sync(epm_adc->epm_spi_client, &m);
+	if (rc) {
+		pr_err("spi sync err with %d\n", rc);
+		return rc;
+	}
+
+	return rx_buf[0];
+}
+
+static int epm_psoc_unpause_conversion(struct epm_adc_drv *epm_adc)
+{
+	struct spi_message m;
+	struct spi_transfer t;
+	char tx_buf[2], rx_buf[2];
+	int rc = 0;
+
+	spi_setup(epm_adc->epm_spi_client);
+
+	memset(&t, 0, sizeof t);
+	memset(tx_buf, 0, sizeof tx_buf);
+	memset(rx_buf, 0, sizeof tx_buf);
+	t.tx_buf = tx_buf;
+	t.rx_buf = rx_buf;
+	spi_message_init(&m);
+	spi_message_add_tail(&t, &m);
+
+	tx_buf[0] = EPM_PSOC_UNPAUSE_CONVERSION;
+
+	t.len = sizeof(tx_buf);
+	t.bits_per_word = EPM_ADC_ADS_SPI_BITS_PER_WORD;
+
+	rc = spi_sync(epm_adc->epm_spi_client, &m);
+	if (rc) {
+		pr_err("spi sync err with %d\n", rc);
+		return rc;
+	}
+
+	rc = spi_sync(epm_adc->epm_spi_client, &m);
+	if (rc) {
+		pr_err("spi sync err with %d\n", rc);
+		return rc;
+	}
+
+	return rx_buf[0];
+}
+
 static int epm_psoc_init(struct epm_adc_drv *epm_adc,
 					struct epm_psoc_init_resp *init_resp)
 {
@@ -805,6 +887,12 @@ static int epm_psoc_init(struct epm_adc_drv *epm_adc,
 	init_resp->firm_ver[2]		= rx_buf[5];
 	init_resp->num_dev		= rx_buf[6];
 	init_resp->num_channel		= rx_buf[7];
+
+	pr_debug("EPM PSOC response for hello command: resp_cmd:0x%x\n",
+							rx_buf[0]);
+	pr_debug("EPM PSOC version:0x%x\n", rx_buf[1]);
+	pr_debug("EPM PSOC firmware version:0x%x\n",
+			rx_buf[6] | rx_buf[5] | rx_buf[4] | rx_buf[3]);
 
 	return rc;
 }
@@ -989,7 +1077,7 @@ static int epm_psoc_get_buffered_data(struct epm_adc_drv *epm_adc,
 	return rc;
 }
 
-static int epm_psoc_timestamp(struct epm_adc_drv *epm_adc,
+static int epm_psoc_get_timestamp(struct epm_adc_drv *epm_adc,
 		struct epm_psoc_system_time_stamp *psoc_timestamp)
 {
 	struct spi_message m;
@@ -1007,15 +1095,51 @@ static int epm_psoc_timestamp(struct epm_adc_drv *epm_adc,
 	spi_message_init(&m);
 	spi_message_add_tail(&t, &m);
 
-	if (psoc_timestamp->cmd == EPM_PSOC_SET_SYSTEM_TIMESTAMP_CMD) {
-		tx_buf[0] = psoc_timestamp->cmd;
-		tx_buf[1] = (psoc_timestamp->timestamp & 0xff000000) >> 24;
-		tx_buf[2] = (psoc_timestamp->timestamp & 0xff0000) >> 16;
-		tx_buf[3] = (psoc_timestamp->timestamp & 0xff00) >> 8;
-		tx_buf[4] = (psoc_timestamp->timestamp & 0xff);
-	} else if (psoc_timestamp->cmd == EPM_PSOC_GET_SYSTEM_TIMESTAMP_CMD) {
-		tx_buf[0] = psoc_timestamp->cmd;
-	}
+	psoc_timestamp->cmd = EPM_PSOC_GET_SYSTEM_TIMESTAMP_CMD;
+	tx_buf[0] = psoc_timestamp->cmd;
+
+	t.len = sizeof(tx_buf);
+	t.bits_per_word = EPM_ADC_ADS_SPI_BITS_PER_WORD;
+
+	rc = spi_sync(epm_adc->epm_spi_client, &m);
+	if (rc)
+		return rc;
+
+	rc = spi_sync(epm_adc->epm_spi_client, &m);
+	if (rc)
+		return rc;
+
+	psoc_timestamp->cmd		= rx_buf[0];
+	psoc_timestamp->timestamp = rx_buf[1] << 24 | rx_buf[2] << 16 |
+					rx_buf[3] << 8 | rx_buf[4];
+
+	return rc;
+}
+
+static int epm_psoc_set_timestamp(struct epm_adc_drv *epm_adc,
+		struct epm_psoc_system_time_stamp *psoc_timestamp)
+{
+	struct spi_message m;
+	struct spi_transfer t;
+	char tx_buf[10], rx_buf[10];
+	int rc = 0;
+
+	spi_setup(epm_adc->epm_spi_client);
+
+	memset(&t, 0, sizeof t);
+	memset(tx_buf, 0, sizeof tx_buf);
+	memset(rx_buf, 0, sizeof tx_buf);
+	t.tx_buf = tx_buf;
+	t.rx_buf = rx_buf;
+	spi_message_init(&m);
+	spi_message_add_tail(&t, &m);
+
+	psoc_timestamp->cmd = EPM_PSOC_SET_SYSTEM_TIMESTAMP_CMD;
+	tx_buf[0] = psoc_timestamp->cmd;
+	tx_buf[1] = (psoc_timestamp->timestamp >> 24) & 0xff;
+	tx_buf[2] = (psoc_timestamp->timestamp >> 16) & 0xff;
+	tx_buf[3] = (psoc_timestamp->timestamp >> 8) & 0xff;
+	tx_buf[4] = (psoc_timestamp->timestamp & 0xff);
 
 	t.len = sizeof(tx_buf);
 	t.bits_per_word = EPM_ADC_ADS_SPI_BITS_PER_WORD;
@@ -1251,7 +1375,85 @@ static int epm_psoc_clear_buffer(struct epm_adc_drv *epm_adc)
 	if (rc)
 		return rc;
 
-	rc = rx_buf[2];
+	rc = rx_buf[1];
+
+	return rc;
+}
+
+static int epm_psoc_get_gpio_buffer_data(struct epm_adc_drv *epm_adc,
+			struct epm_get_gpio_buffer_resp *gpio_resp_pkt)
+{
+	struct spi_message m;
+	struct spi_transfer t;
+	char tx_buf[7], rx_buf[7];
+	int rc = 0;
+
+	spi_setup(epm_adc->epm_spi_client);
+
+	memset(&t, 0, sizeof t);
+	memset(tx_buf, 0, sizeof tx_buf);
+	memset(rx_buf, 0, sizeof tx_buf);
+	t.tx_buf = tx_buf;
+	t.rx_buf = rx_buf;
+	spi_message_init(&m);
+	spi_message_add_tail(&t, &m);
+
+	tx_buf[0] = EPM_PSOC_GET_GPIO_BUFFER_CMD;
+
+	t.len = sizeof(tx_buf);
+	t.bits_per_word = EPM_ADC_ADS_SPI_BITS_PER_WORD;
+
+	rc = spi_sync(epm_adc->epm_spi_client, &m);
+	if (rc)
+		return rc;
+
+	rc = spi_sync(epm_adc->epm_spi_client, &m);
+	if (rc)
+		return rc;
+
+	gpio_resp_pkt->cmd = rx_buf[0];
+	gpio_resp_pkt->status = rx_buf[1];
+	gpio_resp_pkt->bitmask_monitor_pin = rx_buf[2];
+	gpio_resp_pkt->timestamp = rx_buf[3] << 24 | rx_buf[4] << 16 |
+					rx_buf[5] << 8 | tx_buf[6];
+
+	return rc;
+}
+
+static int epm_psoc_gpio_buffer_request_configure(struct epm_adc_drv *epm_adc,
+			struct epm_gpio_buffer_request *gpio_request)
+{
+	struct spi_message m;
+	struct spi_transfer t;
+	char tx_buf[2], rx_buf[2];
+	int rc = 0;
+
+	spi_setup(epm_adc->epm_spi_client);
+
+	memset(&t, 0, sizeof t);
+	memset(tx_buf, 0, sizeof tx_buf);
+	memset(rx_buf, 0, sizeof tx_buf);
+	t.tx_buf = tx_buf;
+	t.rx_buf = rx_buf;
+	spi_message_init(&m);
+	spi_message_add_tail(&t, &m);
+
+	tx_buf[0] = EPM_PSOC_GPIO_BUFFER_REQUEST_CMD;
+	tx_buf[1] = gpio_request->bitmask_monitor_pin;
+
+	t.len = sizeof(tx_buf);
+	t.bits_per_word = EPM_ADC_ADS_SPI_BITS_PER_WORD;
+
+	rc = spi_sync(epm_adc->epm_spi_client, &m);
+	if (rc)
+		return rc;
+
+	rc = spi_sync(epm_adc->epm_spi_client, &m);
+	if (rc)
+		return rc;
+
+	gpio_request->cmd = rx_buf[0];
+	gpio_request->status = rx_buf[1];
 
 	return rc;
 }
@@ -1500,6 +1702,26 @@ static long epm_adc_ioctl(struct file *file, unsigned int cmd,
 			break;
 		}
 	case EPM_PSOC_ADC_GET_SYSTEM_TIMESTAMP:
+		{
+			struct epm_psoc_system_time_stamp psoc_timestamp;
+			int rc;
+
+			if (copy_from_user(&psoc_timestamp,
+				(void __user *)arg,
+				sizeof(struct epm_psoc_system_time_stamp)))
+				return -EFAULT;
+
+			rc = epm_psoc_get_timestamp(epm_adc, &psoc_timestamp);
+			if (rc) {
+				pr_err("PSOC get timestamp failed\n");
+				return -EINVAL;
+			}
+
+			if (copy_to_user((void __user *)arg, &psoc_timestamp,
+				sizeof(struct epm_psoc_system_time_stamp)))
+				return -EFAULT;
+			break;
+		}
 	case EPM_PSOC_ADC_SET_SYSTEM_TIMESTAMP:
 		{
 			struct epm_psoc_system_time_stamp psoc_timestamp;
@@ -1510,9 +1732,9 @@ static long epm_adc_ioctl(struct file *file, unsigned int cmd,
 				sizeof(struct epm_psoc_system_time_stamp)))
 				return -EFAULT;
 
-			rc = epm_psoc_timestamp(epm_adc, &psoc_timestamp);
+			rc = epm_psoc_set_timestamp(epm_adc, &psoc_timestamp);
 			if (rc) {
-				pr_err("PSOC buffered measurement failed\n");
+				pr_err("PSOC set timestamp failed\n");
 				return -EINVAL;
 			}
 
@@ -1602,6 +1824,70 @@ static long epm_adc_ioctl(struct file *file, unsigned int cmd,
 
 			if (copy_to_user((void __user *)arg, &psoc_set_vadc,
 				sizeof(struct epm_psoc_set_vadc)))
+				return -EFAULT;
+			break;
+		}
+	case EPM_PSOC_GPIO_BUFFER_REQUEST:
+		{
+			struct epm_gpio_buffer_request gpio_request;
+			int rc;
+
+			if (copy_from_user(&gpio_request,
+					(void __user *)arg,
+					sizeof(struct epm_gpio_buffer_request)))
+				return -EFAULT;
+
+			rc = epm_psoc_gpio_buffer_request_configure(epm_adc,
+							&gpio_request);
+			if (rc) {
+				pr_err("PSOC buffer request failed\n");
+				return -EINVAL;
+			}
+
+			if (copy_to_user((void __user *)arg, &gpio_request,
+				sizeof(struct epm_gpio_buffer_request)))
+				return -EFAULT;
+			break;
+		}
+	case EPM_PSOC_GET_GPIO_BUFFER_DATA:
+		{
+			struct epm_get_gpio_buffer_resp gpio_resp_pkt;
+			int rc;
+
+			if (copy_from_user(&gpio_resp_pkt,
+				(void __user *)arg,
+				sizeof(struct epm_get_gpio_buffer_resp)))
+				return -EFAULT;
+
+			rc = epm_psoc_get_gpio_buffer_data(epm_adc,
+							&gpio_resp_pkt);
+			if (rc) {
+				pr_err("PSOC get buffer data failed\n");
+				return -EINVAL;
+			}
+
+			if (copy_to_user((void __user *)arg, &gpio_resp_pkt,
+				sizeof(struct epm_get_gpio_buffer_resp)))
+				return -EFAULT;
+			break;
+		}
+	case EPM_PSOC_PAUSE_CONVERSION_REQUEST:
+		{
+			uint32_t result;
+			result = epm_psoc_pause_conversion(epm_adc);
+
+			if (copy_to_user((void __user *)arg, &result,
+						sizeof(uint32_t)))
+				return -EFAULT;
+			break;
+		}
+	case EPM_PSOC_UNPAUSE_CONVERSION_REQUEST:
+		{
+			uint32_t result;
+			result = epm_psoc_unpause_conversion(epm_adc);
+
+			if (copy_to_user((void __user *)arg, &result,
+						sizeof(uint32_t)))
 				return -EFAULT;
 			break;
 		}

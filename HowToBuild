@@ -1,0 +1,31 @@
+KYOCERA Corporation
+
+[Steps to build]
+
+Step1. Get source codes from Code Aurora Forum (CAF).
+    https://www.codeaurora.org/
+
+    Please use the manifest file as following.
+
+    https://www.codeaurora.org/xwiki/bin/QAEP/
+    <Releases on release branch>
+     January 30, 2014 	 LNX.LA.3.5.1-09010-8x26.0 	 msm8226 	LNX.LA.3.5.1-09010-8x26.0.xml	 04.04.02 
+
+    $ repo init -u git://codeaurora.org/platform/manifest.git -b release -m LNX.LA.3.5.1-09010-8x26.0.xml --repo-url=git://codeaurora.org/tools/repo.git
+    $ repo sync
+
+    Note: Please visit CAF site for more details about how to download and so on.
+
+Step2. Copy the files in the "kernel" folder to the "kernel" folder which were made at Step1.
+
+Step3. Add a path of Java Development Kit (JDK) to your environment variable.
+    $ export PATH=<the InstallPath of JDK>/bin:$PATH
+
+Step4. Execute following build commands.
+    $ source build/envsetup.sh
+    $ choosecombo release msm8226 user
+    $ make clean && make -j8 BOARD_DELTAIMAGE_FILE_SYSTEM_TYPE=ext4 BOARD_SECURITYIMAGE_FILE_SYSTEM_TYPE=ext4 BOARD_KERNEL_CMDLINE=console=ttyHSL0,115200,n8 no_console_suspend=1 androidboot.console=ttyHSL0 androidboot.hardware=qcom user_debug=31 msm_rtb.filter=0x37 BOARD_BOOTIMAGE_PARTITION_SIZE=16777216 BOARD_RECOVERYIMAGE_PARTITION_SIZE=16777216 BOARD_SYSTEMIMAGE_PARTITION_SIZE=1270874112 BOARD_USERDATAIMAGE_PARTITION_SIZE=13131317248 BOARD_CACHEIMAGE_PARTITION_SIZE=786432000 BOARD_PERSISTIMAGE_PARTITION_SIZE=8388608 BOARD_SECURITYIMAGE_PARTITION_SIZE=8388608 PRODUCT_BOOT_JARS:=core:conscrypt:okhttp:core-junit:bouncycastle:ext:framework:framework2:telephony-common:voip-common:mms-common:android.policy:services:apache-xml:webviewchromium:telephony-msim:qcmediaplayer:org.codeaurora.Performance
+
+    Note: Please set the option parameter of "-j8" properly for your build environment.
+
+[END]

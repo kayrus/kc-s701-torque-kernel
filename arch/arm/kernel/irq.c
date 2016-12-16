@@ -21,6 +21,10 @@
  *  IRQ's are in fact implemented a bit like signal handlers for the kernel.
  *  Naturally it's not a 1:1 relation, but there are similarities.
  */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
+ */
 #include <linux/kernel_stat.h>
 #include <linux/signal.h>
 #include <linux/ioport.h>
@@ -191,7 +195,7 @@ void migrate_irqs(void)
 		raw_spin_unlock(&desc->lock);
 
 		if (affinity_broken && printk_ratelimit())
-			pr_warning("IRQ%u no longer affine to CPU%u\n", i,
+			pr_debug("IRQ%u no longer affine to CPU%u\n", i,
 				smp_processor_id());
 	}
 

@@ -1,3 +1,6 @@
+# This software is contributed or developed by KYOCERA Corporation.
+# (C) 2014 KYOCERA Corporation
+#
 ccflags-$(CONFIG_POWER_SUPPLY_DEBUG) := -DDEBUG
 
 power_supply-y				:= power_supply_core.o
@@ -64,7 +67,13 @@ obj-$(CONFIG_QPNP_CHARGER)	+= qpnp-charger.o
 obj-$(CONFIG_LTC4088_CHARGER)	+= ltc4088-charger.o
 obj-$(CONFIG_CHARGER_SMB347)	+= smb347-charger.o
 obj-$(CONFIG_BATTERY_BCL)	+= battery_current_limit.o
-obj-$(CONFIG_MAX17048_FUELGAUGE)+= max17048_battery.o
-obj-$(CONFIG_BQ51013B_CHARGER)	+= bq51013b_charger.o
-obj-$(CONFIG_BQ24192_CHARGER)	+= bq24192_charger.o
-obj-$(CONFIG_BATTERY_TEMP_CONTROL) += battery_temp_ctrl.o
+obj-$(CONFIG_OEM_CHARGER_CMD)   += oem-charger_cmd.o
+obj-$(CONFIG_OEM_BATT_LED)      += oem-batt_led.o
+obj-$(CONFIG_OEM_HKADC)         += oem-hkadc.o
+obj-$(CONFIG_OEM_CHG_DET)       += oem-chg_det.o
+obj-$(CONFIG_OEM_CHG_PARAM)     += oem-chg_param.o
+obj-y                           += oem-bms.o
+obj-y                           += oem-chg_control.o
+obj-y                           += oem-chg_smem.o
+obj-y                           += an32258a_kc.o
+obj-$(CONFIG_OEM_HKADC_USB_TM)  += oem-hkadc_usb_tm.o

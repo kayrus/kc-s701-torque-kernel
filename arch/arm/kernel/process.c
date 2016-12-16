@@ -8,6 +8,13 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2012 KYOCERA Corporation
+ * (C) 2013 KYOCERA Corporation
+ * (C) 2014 KYOCERA Corporation
+ */
+
 #include <stdarg.h>
 
 #include <linux/export.h>
@@ -38,6 +45,7 @@
 #include <asm/thread_notify.h>
 #include <asm/stacktrace.h>
 #include <asm/mach/time.h>
+#include <asm/tls.h>
 
 #ifdef CONFIG_CC_STACKPROTECTOR
 #include <linux/stackprotector.h>
@@ -413,7 +421,7 @@ static void show_extra_register_data(struct pt_regs *regs, int nbytes)
 	set_fs(fs);
 }
 
-void __show_regs(struct pt_regs *regs)
+static void show_register(struct pt_regs *regs)
 {
 	unsigned long flags;
 	char buf[64];
@@ -472,15 +480,34 @@ void __show_regs(struct pt_regs *regs)
 		printk("Control: %08x%s\n", ctrl, buf);
 	}
 #endif
+}
 
+void __show_regs(struct pt_regs *regs)
+{
+	show_register(regs);
 	show_extra_register_data(regs, 128);
+}
+
+static void show_pid_comm(void)
+{
+	struct task_struct *tsk = current;
+
+	printk("\n");
+	if (tsk != NULL)
+		printk("Pid: %d, comm: %20s\n", task_pid_nr(tsk), tsk->comm);
 }
 
 void show_regs(struct pt_regs * regs)
 {
-	printk("\n");
-	printk("Pid: %d, comm: %20s\n", task_pid_nr(current), current->comm);
+	show_pid_comm();
 	__show_regs(regs);
+	dump_stack();
+}
+
+void show_regs_user_fault(struct pt_regs * regs)
+{
+	show_pid_comm();
+	show_register(regs);
 	dump_stack();
 }
 
@@ -534,7 +561,8 @@ copy_thread(unsigned long clone_flags, unsigned long stack_start,
 	clear_ptrace_hw_breakpoint(p);
 
 	if (clone_flags & CLONE_SETTLS)
-		thread->tp_value = regs->ARM_r3;
+		thread->tp_value[0] = childregs->ARM_r3;
+	thread->tp_value[1] = get_tpuser();
 
 	thread_notify(THREAD_NOTIFY_COPY, thread);
 
@@ -650,10 +678,11 @@ unsigned long arch_randomize_brk(struct mm_struct *mm)
 }
 
 #ifdef CONFIG_MMU
+#ifdef CONFIG_KUSER_HELPERS
 /*
  * The vectors page is always readable from user space for the
- * atomic helpers and the signal restart code. Insert it into the
- * gate_vma so that it is visible through ptrace and /proc/<pid>/mem.
+ * atomic helpers. Insert it into the gate_vma so that it is visible
+ * through ptrace and /proc/<pid>/mem.
  */
 static struct vm_area_struct gate_vma;
 
@@ -682,14 +711,53 @@ int in_gate_area_no_mm(unsigned long addr)
 {
 	return in_gate_area(NULL, addr);
 }
+#define is_gate_vma(vma)	((vma) == &gate_vma)
+#else
+#define is_gate_vma(vma)	0
+#endif
 
 const char *arch_vma_name(struct vm_area_struct *vma)
 {
-	if (vma == &gate_vma)
+	if (is_gate_vma(vma))
 		return "[vectors]";
+	else if (vma->vm_mm && vma->vm_start == vma->vm_mm->context.sigpage)
+		return "[sigpage]";
 	else if (vma == get_user_timers_vma(NULL))
 		return "[timers]";
 	else
 		return NULL;
+}
+
+static struct page *signal_page;
+extern struct page *get_signal_page(void);
+
+int arch_setup_additional_pages(struct linux_binprm *bprm, int uses_interp)
+{
+	struct mm_struct *mm = current->mm;
+	unsigned long addr;
+	int ret;
+
+	if (!signal_page)
+		signal_page = get_signal_page();
+	if (!signal_page)
+		return -ENOMEM;
+
+	down_write(&mm->mmap_sem);
+	addr = get_unmapped_area(NULL, 0, PAGE_SIZE, 0, 0);
+	if (IS_ERR_VALUE(addr)) {
+		ret = addr;
+		goto up_fail;
+	}
+
+	ret = install_special_mapping(mm, addr, PAGE_SIZE,
+		VM_READ | VM_EXEC | VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC,
+		&signal_page);
+
+	if (ret == 0)
+		mm->context.sigpage = addr;
+
+ up_fail:
+	up_write(&mm->mmap_sem);
+	return ret;
 }
 #endif

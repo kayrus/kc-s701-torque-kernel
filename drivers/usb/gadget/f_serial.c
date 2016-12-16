@@ -4,6 +4,8 @@
  * Copyright (C) 2003 Al Borchers (alborchers@steinerpoint.com)
  * Copyright (C) 2008 by David Brownell
  * Copyright (C) 2008 by Nokia Corporation
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
  *
  * This software is distributed under the terms of the GNU General
  * Public License ("GPL") as published by the Free Software Foundation,
@@ -93,7 +95,7 @@ static inline struct f_gser *port_to_gser(struct gserial *p)
 	return container_of(p, struct f_gser, port);
 }
 #define GS_LOG2_NOTIFY_INTERVAL		5	/* 1 << 5 == 32 msec */
-#define GS_NOTIFY_MAXPACKET		16
+#define GS_NOTIFY_MAXPACKET		10	/* notification + 2 bytes */
 #endif
 /*-------------------------------------------------------------------------*/
 
@@ -975,6 +977,12 @@ int gser_bind_config(struct usb_configuration *c, u8 port_num)
 	gser->port.disconnect = gser_disconnect;
 	gser->port.send_break = gser_send_break;
 #endif
+#ifndef FEATURE_KYOCERA_DATA_QCOM
+    gser->port_line_coding.dwDTERate = 0x2580;
+    gser->port_line_coding.bCharFormat = USB_CDC_1_STOP_BITS;
+    gser->port_line_coding.bParityType = USB_CDC_NO_PARITY;
+    gser->port_line_coding.bDataBits = 8;
+#endif /* FEATURE_KYOCERA_DATA_QCOM */
 
 	status = usb_add_function(c, &gser->port.func);
 	if (status)

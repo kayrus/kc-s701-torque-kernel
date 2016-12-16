@@ -24,6 +24,12 @@
    Jean Delvare <khali@linux-fr.org>
    Mux support by Rodolfo Giometti <giometti@enneenne.com> and
    Michael Lawnick <michael.lawnick.ext@nsn.com> */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2012 KYOCERA Corporation
+ * (C) 2013 KYOCERA Corporation
+ * (C) 2014 KYOCERA Corporation
+ */
 
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -32,6 +38,7 @@
 #include <linux/i2c.h>
 #include <linux/init.h>
 #include <linux/idr.h>
+#include <linux/delay.h>
 #include <linux/mutex.h>
 #include <linux/of_device.h>
 #include <linux/completion.h>
@@ -39,10 +46,28 @@
 #include <linux/irqflags.h>
 #include <linux/rwsem.h>
 #include <linux/pm_runtime.h>
+#include <linux/gpio.h>
 #include <asm/uaccess.h>
 
 #include "i2c-core.h"
 
+#define GPIO_I2C_SECO_SDA       6
+#define GPIO_I2C_SECO_SCL       7
+#define GPIO_I2C_WPC_SDA       10
+#define GPIO_I2C_WPC_SCL       11
+#define GPIO_I2C_PRIM_SDA      14
+#define GPIO_I2C_PRIM_SCL      15
+#define GPIO_I2C_TP_SDA        18
+#define GPIO_I2C_TP_SCL        19
+
+#define GPIO_S7708A_I2C_SDA     GPIO_I2C_PRIM_SDA
+#define GPIO_S7708A_I2C_SCL     GPIO_I2C_PRIM_SCL
+
+
+#define MSM_8974_BLSP1_QUP2_I2C_BUS_ID   2
+#define MSM_8974_BLSP1_QUP3_I2C_BUS_ID   3
+#define MSM_8974_BLSP1_QUP4_I2C_BUS_ID   4
+#define MSM_8974_BLSP1_QUP5_I2C_BUS_ID   5
 
 /* core_lock protects i2c_adapter_idr, and guarantees
    that device detection, deletion of detected devices, and attach_adapter
@@ -264,6 +289,148 @@ static int i2c_device_pm_restore(struct device *dev)
 static void i2c_client_dev_release(struct device *dev)
 {
 	kfree(to_i2c_client(dev));
+}
+
+void i2c_compulsory_reset(struct i2c_adapter *adap, int scl, int sda)
+{
+	int i;
+
+	gpio_direction_input(sda);
+	gpio_direction_input(scl);
+	gpio_tlmm_config(GPIO_CFG(sda, 0, GPIO_CFG_INPUT,  GPIO_CFG_NO_PULL, GPIO_CFG_2MA), GPIO_CFG_ENABLE);
+	gpio_tlmm_config(GPIO_CFG(scl, 0, GPIO_CFG_INPUT,  GPIO_CFG_NO_PULL, GPIO_CFG_2MA), GPIO_CFG_ENABLE);
+	udelay(5);
+
+	for (i = 0; i < 9; i++) {
+		gpio_direction_output(sda, 0);
+		udelay(5);
+		gpio_direction_output(scl,0);
+		udelay(5);
+		gpio_direction_input(sda);
+		udelay(5);
+		gpio_direction_input(scl);
+		udelay(5);
+	}
+	udelay(10);
+	for (i = 0; i < 1; i++) {
+		gpio_direction_output(scl,0);
+		udelay(5);
+		gpio_direction_output(sda, 0);
+		udelay(5);
+		gpio_direction_input(scl);
+		udelay(5);
+		gpio_direction_input(sda);
+		udelay(5);
+	}
+	udelay(10);
+	gpio_tlmm_config(GPIO_CFG(sda, 3, GPIO_CFG_INPUT,  GPIO_CFG_NO_PULL, GPIO_CFG_2MA), GPIO_CFG_ENABLE);
+	gpio_tlmm_config(GPIO_CFG(scl, 3, GPIO_CFG_INPUT,  GPIO_CFG_NO_PULL, GPIO_CFG_2MA), GPIO_CFG_ENABLE);
+
+	dev_notice(&adap->dev, "%s : [SCL] gpioNo=%d, [SDA] gpioNo=%d\n", __func__, scl, sda);
+}
+
+void i2c_reset_S7780A(struct i2c_adapter *adap)
+{
+	struct i2c_msg msg;
+	char buf[1];
+
+	buf[0]    = 0xFF;
+	msg.addr  = 0x007F;
+	msg.flags = (I2C_M_TEN | I2C_M_RD);
+	msg.len   = 1;
+	msg.buf   = buf;
+
+	if (adap->algo->master_xfer) {
+		dev_notice(&adap->dev, "%s\n", __func__);
+		(void)adap->algo->master_xfer(adap, &msg, 1);
+		(void)adap->algo->master_xfer(adap, &msg, 1);
+		(void)adap->algo->master_xfer(adap, &msg, 1);
+	} else {
+		dev_err(&adap->dev, "%s : I2C level transfers not supported\n", __func__);
+	}
+}
+
+void i2c_reset_device(struct i2c_adapter *adap)
+{
+	int scl;
+	int sda;
+
+	switch (adap->nr) {
+	case MSM_8974_BLSP1_QUP2_I2C_BUS_ID:
+		scl = GPIO_I2C_SECO_SCL;
+		sda = GPIO_I2C_SECO_SDA;
+		break;
+	case MSM_8974_BLSP1_QUP3_I2C_BUS_ID:
+		scl = GPIO_I2C_WPC_SCL;
+		sda = GPIO_I2C_WPC_SDA;
+		break;
+	case MSM_8974_BLSP1_QUP4_I2C_BUS_ID:
+		scl = GPIO_I2C_PRIM_SCL;
+		sda = GPIO_I2C_PRIM_SDA;
+		break;
+	case MSM_8974_BLSP1_QUP5_I2C_BUS_ID:
+		scl = GPIO_I2C_TP_SCL;
+		sda = GPIO_I2C_TP_SDA;
+		break;
+	default:
+		dev_err(&adap->dev, "%s : unknown BusID = %d\n", __func__, adap->nr);
+		return;
+	}
+
+	dev_err(&adap->dev, "%s : [SCL] gpio No=%d, [SDA] gpioNo=%d\n", __func__, scl, sda);
+
+	if(((scl == GPIO_I2C_SECO_SCL) && (sda == GPIO_I2C_SECO_SDA)) ){
+		i2c_compulsory_reset(adap, scl, sda);
+	}
+    
+	if((scl == GPIO_S7708A_I2C_SCL) &&
+	   (sda == GPIO_S7708A_I2C_SDA)) {
+		i2c_reset_S7780A(adap);
+	}
+}
+
+void i2c_init_device(struct i2c_adapter *adap)
+{
+	int scl;
+	int sda;
+
+	switch (adap->nr) {
+	case MSM_8974_BLSP1_QUP2_I2C_BUS_ID:
+		scl = GPIO_I2C_SECO_SCL;
+		sda = GPIO_I2C_SECO_SDA;
+		break;
+	case MSM_8974_BLSP1_QUP3_I2C_BUS_ID:
+		scl = GPIO_I2C_WPC_SCL;
+		sda = GPIO_I2C_WPC_SDA;
+		break;
+	case MSM_8974_BLSP1_QUP4_I2C_BUS_ID:
+		scl = GPIO_I2C_PRIM_SCL;
+		sda = GPIO_I2C_PRIM_SDA;
+		break;
+	case MSM_8974_BLSP1_QUP5_I2C_BUS_ID:
+		scl = GPIO_I2C_TP_SCL;
+		sda = GPIO_I2C_TP_SDA;
+		break;
+	default:
+		dev_err(&adap->dev, "%s : unknown BusID = %d\n", __func__, adap->nr);
+		return;
+	}
+
+    gpio_request(scl, "i2c_init_device");
+    gpio_request(sda, "i2c_init_device");
+    
+	if(((scl == GPIO_I2C_SECO_SCL) && (sda == GPIO_I2C_SECO_SDA)) ){
+		i2c_compulsory_reset(adap, scl, sda);
+	}
+    
+	if((scl == GPIO_S7708A_I2C_SCL) &&
+	   (sda == GPIO_S7708A_I2C_SDA)) {
+		i2c_reset_S7780A(adap);
+	}
+
+	gpio_free(scl);
+    gpio_free(sda);
+
 }
 
 static ssize_t
@@ -1351,6 +1518,10 @@ int i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num)
 		orig_jiffies = jiffies;
 		for (ret = 0, try = 0; try <= adap->retries; try++) {
 			ret = adap->algo->master_xfer(adap, msgs, num);
+			if (ret < 0){
+				dev_err(&adap->dev, "%s : i2c_reset_device BusID = %d\n", __func__, adap->nr);
+				i2c_reset_device(adap);
+			}
 			if (ret != -EAGAIN)
 				break;
 			if (time_after(jiffies, orig_jiffies + adap->timeout))

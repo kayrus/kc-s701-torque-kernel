@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2014 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -36,7 +36,8 @@
 	(((slv >= MSM_BUS_SLAVE_FIRST) && (slv <= MSM_BUS_SLAVE_LAST)) ? 1 : 0)
 
 #define INTERLEAVED_BW(fab_pdata, bw, ports) \
-	((fab_pdata->il_flag) ? msm_bus_div64((ports), (bw)) : (bw))
+	((fab_pdata->il_flag) ? ((bw < 0) \
+	? -msm_bus_div64((ports), (-bw)) : msm_bus_div64((ports), (bw))) : (bw))
 #define INTERLEAVED_VAL(fab_pdata, n) \
 	((fab_pdata->il_flag) ? (n) : 1)
 
@@ -81,10 +82,12 @@ struct msm_bus_node_info {
 	unsigned int prio_wr;
 	unsigned int prio1;
 	unsigned int prio0;
-	u64 th;
+	unsigned int num_thresh;
+	u64 *th;
+	u64 cur_lim_bw;
 	unsigned int mode_thresh;
 	bool dual_conf;
-	u64 bimc_bw;
+	u64 *bimc_bw;
 	u32 bimc_gp;
 	u32 bimc_thmp;
 	const char *name;

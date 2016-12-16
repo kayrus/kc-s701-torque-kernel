@@ -1,3 +1,7 @@
+#
+# This software is contributed or developed by KYOCERA Corporation.
+# (C) 2014 KYOCERA Corporation
+#
 header-y += tavarua.h
 header-y += radio-iris-commands.h
 
@@ -16,3 +20,4 @@ header-y += msmb_isp.h
 header-y += msmb_ispif.h
 header-y += msmb_generic_buf_mgr.h
 header-y += msmb_pproc.h
+header-y += custmcam.h

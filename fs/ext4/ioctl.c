@@ -432,6 +432,9 @@ resizefs_out:
 		return 0;
 	}
 
+	case EXT4_IOC_INODE_JIFFIES:
+		return put_user(ei->created_when, (unsigned long __user *)arg);
+
 	default:
 		return -ENOTTY;
 	}

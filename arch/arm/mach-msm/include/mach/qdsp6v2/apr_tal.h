@@ -1,3 +1,8 @@
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2013 KYOCERA Corporation
+ * (C) 2014 KYOCERA Corporation
+ */
 /* Copyright (c) 2010-2011, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -31,7 +36,11 @@
 
 #define APR_MAX_BUF   8192
 
+#ifdef CONFIG_KYOCERA_MSND
+#define APR_OPEN_TIMEOUT_MS 60000
+#else /* CONFIG_KYOCERA_MSND */
 #define APR_OPEN_TIMEOUT_MS 5000
+#endif /* CONFIG_KYOCERA_MSND */
 
 typedef void (*apr_svc_cb_fn)(void *buf, int len, void *priv);
 struct apr_svc_ch_dev *apr_tal_open(uint32_t svc, uint32_t dest,

@@ -124,7 +124,6 @@ static int msm_csiphy_lane_config(struct csiphy_device *csiphy_dev,
 		j++;
 		lane_mask >>= 1;
 	}
-	msleep(20);
 	return rc;
 }
 
@@ -178,6 +177,7 @@ static struct msm_cam_clk_info csiphy_8960_clk_info[] = {
 static struct msm_cam_clk_info csiphy_8610_clk_info[] = {
 	{"csiphy_timer_src_clk", 200000000},
 	{"csiphy_timer_clk", -1},
+	{"csi_ahb_clk", -1},
 };
 
 static struct msm_cam_clk_info csiphy_8974_clk_info[] = {
@@ -400,7 +400,6 @@ static int msm_csiphy_release(struct csiphy_device *csiphy_dev, void *arg)
 	struct msm_camera_csi_lane_params *csi_lane_params;
 	uint16_t csi_lane_mask;
 	csi_lane_params = (struct msm_camera_csi_lane_params *)arg;
-	csi_lane_mask = csi_lane_params->csi_lane_mask;
 
 	if (!csiphy_dev || !csiphy_dev->ref_count) {
 		pr_err("%s csiphy dev NULL / ref_count ZERO\n", __func__);
@@ -413,21 +412,31 @@ static int msm_csiphy_release(struct csiphy_device *csiphy_dev, void *arg)
 		return -EINVAL;
 	}
 
-	CDBG("%s csiphy_params, lane assign %x mask = %x\n",
-		__func__,
-		csi_lane_params->csi_lane_assign,
-		csi_lane_params->csi_lane_mask);
-
 	if (csiphy_dev->hw_version < CSIPHY_VERSION_V30) {
 		csiphy_dev->lane_mask[csiphy_dev->pdev->id] = 0;
 		for (i = 0; i < 4; i++)
 			msm_camera_io_w(0x0, csiphy_dev->base +
 				MIPI_CSIPHY_LNn_CFG2_ADDR + 0x40*i);
 	} else {
+		if (!csi_lane_params) {
+			pr_err("%s:%d failed: csi_lane_params %p\n", __func__,
+				__LINE__, csi_lane_params);
+			return -EINVAL;
+		}
+		csi_lane_mask = (csi_lane_params->csi_lane_mask & 0x1F);
+
+		CDBG("%s csiphy_params, lane assign %x mask = %x\n",
+			__func__,
+			csi_lane_params->csi_lane_assign,
+			csi_lane_params->csi_lane_mask);
+
+		if (!csi_lane_mask)
+			csi_lane_mask = 0x1f;
+
 		csiphy_dev->lane_mask[csiphy_dev->pdev->id] &=
-			~(csi_lane_params->csi_lane_mask);
+			~(csi_lane_mask);
 		i = 0;
-		while (csi_lane_mask & 0x1F) {
+		while (csi_lane_mask) {
 			if (csi_lane_mask & 0x1) {
 				msm_camera_io_w(0x0, csiphy_dev->base +
 					MIPI_CSIPHY_LNn_CFG2_ADDR + 0x40*i);
@@ -475,7 +484,6 @@ static int msm_csiphy_release(struct csiphy_device *csiphy_dev, void *arg)
 	struct msm_camera_csi_lane_params *csi_lane_params;
 	uint16_t csi_lane_mask;
 	csi_lane_params = (struct msm_camera_csi_lane_params *)arg;
-	csi_lane_mask = csi_lane_params->csi_lane_mask;
 
 	if (!csiphy_dev || !csiphy_dev->ref_count) {
 		pr_err("%s csiphy dev NULL / ref_count ZERO\n", __func__);
@@ -488,21 +496,31 @@ static int msm_csiphy_release(struct csiphy_device *csiphy_dev, void *arg)
 		return -EINVAL;
 	}
 
-	CDBG("%s csiphy_params, lane assign %x mask = %x\n",
-		__func__,
-		csi_lane_params->csi_lane_assign,
-		csi_lane_params->csi_lane_mask);
-
 	if (csiphy_dev->hw_version < CSIPHY_VERSION_V30) {
 		csiphy_dev->lane_mask[csiphy_dev->pdev->id] = 0;
 		for (i = 0; i < 4; i++)
 			msm_camera_io_w(0x0, csiphy_dev->base +
 				MIPI_CSIPHY_LNn_CFG2_ADDR + 0x40*i);
 	} else {
+		if (!csi_lane_params) {
+			pr_err("%s:%d failed: csi_lane_params %p\n", __func__,
+				__LINE__, csi_lane_params);
+			return -EINVAL;
+		}
+		csi_lane_mask = (csi_lane_params->csi_lane_mask & 0x1F);
+
+		CDBG("%s csiphy_params, lane assign %x mask = %x\n",
+			__func__,
+			csi_lane_params->csi_lane_assign,
+			csi_lane_params->csi_lane_mask);
+
+		if (!csi_lane_mask)
+			csi_lane_mask = 0x1f;
+
 		csiphy_dev->lane_mask[csiphy_dev->pdev->id] &=
-			~(csi_lane_params->csi_lane_mask);
+			~(csi_lane_mask);
 		i = 0;
-		while (csi_lane_mask & 0x1F) {
+		while (csi_lane_mask) {
 			if (csi_lane_mask & 0x1) {
 				msm_camera_io_w(0x0, csiphy_dev->base +
 					MIPI_CSIPHY_LNn_CFG2_ADDR + 0x40*i);

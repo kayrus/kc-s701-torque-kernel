@@ -1,3 +1,7 @@
+# This software is contributed or developed by KYOCERA Corporation.
+# (C) 2014 KYOCERA Corporation
+#
+
 config FB_MSM_MDSS_WRITEBACK
 	bool "MDSS Writeback Panel"
 	---help---
@@ -20,3 +24,70 @@ config FB_MSM_MDSS_HDMI_MHL_SII8334
 	  Support the HDMI to MHL conversion.
 	  MHL (Mobile High-Definition Link) technology
 	  uses USB connector to output HDMI content
+
+config FB_MSM_MDSS_DSI_CTRL_STATUS
+	tristate "DSI controller status check feature"
+	default y
+	---help---
+	  Check DSI controller status periodically (default period is 5
+	  seconds) by sending Bus-Turn-Around (BTA) command. If DSI controller
+	  fails to acknowledge the BTA command, it sends PANEL_ALIVE=0 status
+	  to HAL layer to reset the controller.
+
+config DISP_EXT_REFRESH
+	bool "To enable the display refresh function"
+	default n
+	---help---
+	  Say Y here if you want to enable the refresh function of your display.
+config DISP_EXT_REFRESH_EASY
+	bool "To enable the display refresh easy function"
+	default n
+	---help---
+	  Say Y here if you want to enable the refresh easy function of your display.
+config DISP_EXT_BOARD
+	bool "Enables the detection function of the display board"
+	default y
+	---help---
+	  Say Y here if you want to enable the detection function of your display.
+config DISP_EXT_BLC
+	bool "To enable the display backlight function"
+	default n
+	---help---
+	  Say Y here if you want to enable the backlight function of your display.
+config DISP_EXT_DIAG
+	bool "To enable the display diag function"
+	default y
+	---help---
+	  Say Y here if you want to enable the diag function of your display.
+config DISP_EXT_PROPERTY
+	bool "To enable the display property function"
+	default n
+	---help---
+	  Say Y here if you want to enable the property function of your display.
+config DISP_EXT_UTIL
+	bool "To enable the display utility"
+	default y
+	---help---
+	  Say Y here if you want to enable the utility of your display.
+config DISP_EXT_UTIL_GET_RATE
+	bool "To enable feature get refresh rate"
+	default n
+	---help---
+	  Say Y here if you want to enable feature get refresh rate.
+config DISP_UTIL_DSI_CLK_OFF
+	bool "To enable feature dsi clock off"
+	default n
+	---help---
+	  Say Y here if you want to enable feature dsi clock off.
+config DISP_EXT_UTIL_VSYNC
+	bool "To enable feature tune vsync"
+	default n
+	---help---
+	  Say Y here if you want to enable feature tune vsync.
+
+config FB_MSM_MDSS_MDP3
+	depends on FB_MSM_MDSS
+	bool "MDP3 display controller"
+	---help---
+	The MDP3 provides support for an older version display controller
+	included in latest display sub-system, known as MDSS.

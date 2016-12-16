@@ -13,12 +13,23 @@
  * GNU General Public License for more details.
  *
  */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2011 KYOCERA Corporation
+ * (C) 2012 KYOCERA Corporation
+ * (C) 2013 KYOCERA Corporation
+ * (C) 2014 KYOCERA Corporation
+ */
 
 #ifndef _LINUX_LOGGER_H
 #define _LINUX_LOGGER_H
 
 #include <linux/types.h>
 #include <linux/ioctl.h>
+
+#include <linux/io.h>
+#include <mach/msm_iomap.h>
+#include "resetlog.h"
 
 /*
  * The userspace structure for version 1 of the logger_entry ABI.
@@ -56,6 +67,13 @@ struct logger_entry {
 #define LOGGER_LOG_SYSTEM	"log_system"	/* system/framework messages */
 #define LOGGER_LOG_MAIN		"log_main"	/* everything else */
 
+#ifdef CONFIG_DEBUG_LAST_LOGCAT
+#define LOGGER_LOG_LAST_RADIO	"log_last_radio"
+#define LOGGER_LOG_LAST_EVENTS	"log_last_events"
+#define LOGGER_LOG_LAST_SYSTEM	"log_last_system"
+#define LOGGER_LOG_LAST_MAIN	"log_last_main"
+#endif /* CONFIG_DEBUG_LAST_LOGCAT */
+
 #define LOGGER_ENTRY_MAX_PAYLOAD	4076
 
 #define __LOGGERIO	0xAE
@@ -66,5 +84,17 @@ struct logger_entry {
 #define LOGGER_FLUSH_LOG		_IO(__LOGGERIO, 4) /* flush log */
 #define LOGGER_GET_VERSION		_IO(__LOGGERIO, 5) /* abi version */
 #define LOGGER_SET_VERSION		_IO(__LOGGERIO, 6) /* abi version */
+
+#define LOGGER_INFO_SIZE        (sizeof(struct logger_log_info))
+#define ADDR_LOGGER_INFO_MAIN   ( &((ram_log_info_type *)ADDR_CONTROL_INFO)->info[LOGGER_INFO_MAIN  ] )
+#define ADDR_LOGGER_INFO_SYSTEM ( &((ram_log_info_type *)ADDR_CONTROL_INFO)->info[LOGGER_INFO_SYSTEM] )
+#define ADDR_LOGGER_INFO_EVENTS ( &((ram_log_info_type *)ADDR_CONTROL_INFO)->info[LOGGER_INFO_EVENTS] )
+#define ADDR_LOGGER_INFO_RADIO  ( &((ram_log_info_type *)ADDR_CONTROL_INFO)->info[LOGGER_INFO_RADIO ] )
+#ifdef CONFIG_DEBUG_LAST_LOGCAT
+#define ADDR_LASTLOG_INFO_MAIN   ( &((last_log_uninit_info_type *)ADDR_LASTLOGCAT_INFO)->info[LOGGER_INFO_MAIN  ] )
+#define ADDR_LASTLOG_INFO_SYSTEM ( &((last_log_uninit_info_type *)ADDR_LASTLOGCAT_INFO)->info[LOGGER_INFO_SYSTEM] )
+#define ADDR_LASTLOG_INFO_EVENTS ( &((last_log_uninit_info_type *)ADDR_LASTLOGCAT_INFO)->info[LOGGER_INFO_EVENTS] )
+#define ADDR_LASTLOG_INFO_RADIO  ( &((last_log_uninit_info_type *)ADDR_LASTLOGCAT_INFO)->info[LOGGER_INFO_RADIO ] )
+#endif /* CONFIG_DEBUG_LAST_LOGCAT */
 
 #endif /* _LINUX_LOGGER_H */

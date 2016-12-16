@@ -3,6 +3,8 @@
  *
  * Copyright (C) 2011 Google, Inc.
  * Author: Mike Lockwood <lockwood@android.com>
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -555,6 +557,7 @@ static int create_bulk_endpoints(struct acc_dev *dev,
 	ep->driver_data = dev;		/* claim the endpoint */
 	dev->ep_out = ep;
 
+#ifdef FEATURE_KYOCERA_DATA_QCOM
 	ep = usb_ep_autoconfig(cdev->gadget, out_desc);
 	if (!ep) {
 		DBG(cdev, "usb_ep_autoconfig for ep_out failed\n");
@@ -563,6 +566,7 @@ static int create_bulk_endpoints(struct acc_dev *dev,
 	DBG(cdev, "usb_ep_autoconfig for ep_out got %s\n", ep->name);
 	ep->driver_data = dev;		/* claim the endpoint */
 	dev->ep_out = ep;
+#endif /* FEATURE_KYOCERA_DATA_QCOM */
 
 	/* now allocate requests for our endpoints */
 	for (i = 0; i < TX_REQ_MAX; i++) {

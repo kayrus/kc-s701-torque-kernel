@@ -7,6 +7,10 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
+ */
 
 #include <linux/err.h>
 #include <linux/gpio.h>
@@ -37,6 +41,8 @@ out:
 	return ret;
 }
 
+extern unsigned char mmc_eject_status;
+
 static irqreturn_t mmc_cd_gpio_irqt(int irq, void *dev_id)
 {
 	struct mmc_host *host = dev_id;
@@ -48,11 +54,13 @@ static irqreturn_t mmc_cd_gpio_irqt(int irq, void *dev_id)
 		goto out;
 
 	if (status ^ cd->status) {
-		pr_info("%s: slot status change detected (%d -> %d), GPIO_ACTIVE_%s\n",
+		 pr_notice("%s: slot status change detected (%d -> %d), GPIO_ACTIVE_%s\n",
 				mmc_hostname(host), cd->status, status,
 				(host->caps2 & MMC_CAP2_CD_ACTIVE_HIGH) ?
 				"HIGH" : "LOW");
 		cd->status = status;
+
+		mmc_eject_status = !status;
 
 		/* Schedule a card detection after a debounce timeout */
 		mmc_detect_change(host, msecs_to_jiffies(100));
@@ -91,6 +99,8 @@ int mmc_cd_gpio_request(struct mmc_host *host, unsigned int gpio)
 
 	cd->status = ret;
 
+	mmc_eject_status = !cd->status;
+
 	ret = request_threaded_irq(irq, NULL, mmc_cd_gpio_irqt,
 				   IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING,
 				   cd->label, host);
@@ -111,8 +121,12 @@ void mmc_cd_gpio_free(struct mmc_host *host)
 {
 	struct mmc_cd_gpio *cd = host->hotplug.handler_priv;
 
+	if (!cd || !gpio_is_valid(cd->gpio))
+		return;
+
 	free_irq(host->hotplug.irq, host);
 	gpio_free(cd->gpio);
+	cd->gpio = -EINVAL;
 	kfree(cd);
 }
 EXPORT_SYMBOL(mmc_cd_gpio_free);

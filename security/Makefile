@@ -1,4 +1,7 @@
 #
+# This software is contributed or developed by KYOCERA Corporation.
+# (C) 2014 KYOCERA Corporation
+#
 # Makefile for the kernel security code
 #
 
@@ -28,3 +31,7 @@ obj-$(CONFIG_CGROUP_DEVICE)		+= device_cgroup.o
 # Object integrity file lists
 subdir-$(CONFIG_INTEGRITY)		+= integrity
 obj-$(CONFIG_INTEGRITY)			+= integrity/built-in.o
+
+# Object misc file lists
+subdir-$(CONFIG_SECURITY_KCPDSM)	+= misc
+obj-$(CONFIG_SECURITY_KCPDSM)	+= misc/built-in.o

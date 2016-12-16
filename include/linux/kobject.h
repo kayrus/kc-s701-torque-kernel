@@ -1,4 +1,8 @@
 /*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
+ */
+/*
  * kobject.h - generic kernel object infrastructure.
  *
  * Copyright (c) 2002-2003 Patrick Mochel
@@ -29,6 +33,8 @@
 
 #define UEVENT_HELPER_PATH_LEN		256
 #define UEVENT_NUM_ENVP			32	/* number of env pointers */
+#undef  UEVENT_NUM_ENVP
+#define UEVENT_NUM_ENVP			64	/* number of env pointers */
 #define UEVENT_BUFFER_SIZE		2048	/* buffer for the variables */
 
 /* path to the userspace helper executed on an event */

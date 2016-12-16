@@ -9,6 +9,11 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2013 KYOCERA Corporation
+ * (C) 2014 KYOCERA Corporation
+ */
 
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -27,9 +32,6 @@
 #include <linux/platform_device.h>
 #include <mach/scm.h>
 #include <mach/msm_memory_dump.h>
-#ifdef CONFIG_LGE_HANDLE_PANIC
-#include <mach/lge_handle_panic.h>
-#endif
 
 #define MODULE_NAME "msm_watchdog"
 #define WDT0_ACCSCSSNBARK_INT 0
@@ -71,7 +73,7 @@ struct msm_watchdog_data {
 
 /*
  * On the kernel command line specify
- * msm_watchdog.enable=1 to enable the watchdog
+ * msm_watchdog_v2.enable=1 to enable the watchdog
  * By default watchdog is turned on
  */
 static int enable = 1;
@@ -79,25 +81,11 @@ module_param(enable, int, 0);
 
 /*
  * On the kernel command line specify
- * msm_watchdog.WDT_HZ=<clock val in HZ> to set Watchdog
+ * msm_watchdog_v2.WDT_HZ=<clock val in HZ> to set Watchdog
  * ticks. By default it is set to 32765.
  */
 static long WDT_HZ = 32765;
 module_param(WDT_HZ, long, 0);
-
-#ifdef CONFIG_LGE_HANDLE_PANIC
-static void __iomem *msm_timer0_base;
-
-void __iomem *wdt_timer_get_timer0_base(void)
-{
-	return msm_timer0_base;
-}
-
-static void wdt_timer_set_timer0_base(void __iomem * iomem)
-{
-	msm_timer0_base = iomem;
-}
-#endif
 
 static void pet_watchdog_work(struct work_struct *work);
 static void init_watchdog_work(struct work_struct *work);
@@ -110,6 +98,7 @@ static void dump_cpu_alive_mask(struct msm_watchdog_data *wdog_dd)
 	printk(KERN_INFO "cpu alive mask from last pet %s\n", alive_mask_buf);
 }
 
+extern void set_kcj_pet_time(void);
 static int msm_watchdog_suspend(struct device *dev)
 {
 	struct msm_watchdog_data *wdog_dd =
@@ -119,6 +108,7 @@ static int msm_watchdog_suspend(struct device *dev)
 	__raw_writel(1, wdog_dd->base + WDT0_RST);
 	__raw_writel(0, wdog_dd->base + WDT0_EN);
 	mb();
+	set_kcj_pet_time();
 	return 0;
 }
 
@@ -131,6 +121,7 @@ static int msm_watchdog_resume(struct device *dev)
 	__raw_writel(1, wdog_dd->base + WDT0_EN);
 	__raw_writel(1, wdog_dd->base + WDT0_RST);
 	mb();
+	set_kcj_pet_time();
 	return 0;
 }
 
@@ -268,6 +259,7 @@ static void pet_watchdog(struct msm_watchdog_data *wdog_dd)
 	if (slack_ns < wdog_dd->min_slack_ns)
 		wdog_dd->min_slack_ns = slack_ns;
 	wdog_dd->last_pet = time_ns;
+	set_kcj_pet_time();
 }
 
 static void keep_alive_response(void *info)
@@ -335,6 +327,9 @@ static int msm_watchdog_remove(struct platform_device *pdev)
 	return 0;
 }
 
+extern void set_smem_crash_kind_wdog_hw(void);
+extern void set_smem_crash_system_kernel(void);
+extern void set_smem_crash_info_data( const char *pdata );
 static irqreturn_t wdog_bark_handler(int irq, void *dev_id)
 {
 	struct msm_watchdog_data *wdog_dd = (struct msm_watchdog_data *)dev_id;
@@ -351,9 +346,6 @@ static irqreturn_t wdog_bark_handler(int irq, void *dev_id)
 	if (wdog_dd->do_ipi_ping)
 		dump_cpu_alive_mask(wdog_dd);
 	printk(KERN_INFO "Causing a watchdog bite!");
-#ifdef CONFIG_LGE_HANDLE_PANIC
-	lge_set_restart_reason(LGE_RB_MAGIC | LGE_ERR_TZ | LGE_ERR_TZ_WDT_BARK);
-#endif
 	__raw_writel(1, wdog_dd->base + WDT0_BITE_TIME);
 	mb();
 	__raw_writel(1, wdog_dd->base + WDT0_RST);
@@ -365,6 +357,19 @@ static irqreturn_t wdog_bark_handler(int irq, void *dev_id)
 		__raw_readl(wdog_dd->base + WDT0_EN),
 		__raw_readl(wdog_dd->base + WDT0_BARK_TIME),
 		__raw_readl(wdog_dd->base + WDT0_BITE_TIME));
+	set_smem_crash_system_kernel();
+	set_smem_crash_kind_wdog_hw();
+	{
+		char buf[33];
+		memset( buf, '\0', sizeof(buf) );
+		snprintf( buf,
+		          sizeof(buf),
+		          "%x;%s",
+		          __LINE__,
+		          __func__
+		);
+		set_smem_crash_info_data( (const char *)buf );
+	}
 	panic("Failed to cause a watchdog bite! - Falling back to kernel panic!");
 	return IRQ_HANDLED;
 }
@@ -376,6 +381,7 @@ static irqreturn_t wdog_ppi_bark(int irq, void *dev_id)
 	return wdog_bark_handler(irq, wdog_dd);
 }
 
+extern void set_kcj_regsave_addr(unsigned long regsave_addr);
 static void configure_bark_dump(struct msm_watchdog_data *wdog_dd)
 {
 	int ret;
@@ -389,6 +395,7 @@ static void configure_bark_dump(struct msm_watchdog_data *wdog_dd)
 	if (wdog_dd->scm_regsave) {
 		cmd_buf.addr = virt_to_phys(wdog_dd->scm_regsave);
 		cmd_buf.len  = PAGE_SIZE;
+		set_kcj_regsave_addr((unsigned long)cmd_buf.addr);
 		ret = scm_call(SCM_SVC_UTIL, SCM_SET_REGSAVE_CMD,
 					&cmd_buf, sizeof(cmd_buf), NULL, 0);
 		if (ret)
@@ -465,6 +472,7 @@ static void init_watchdog_work(struct work_struct *work)
 	__raw_writel(1, wdog_dd->base + WDT0_EN);
 	__raw_writel(1, wdog_dd->base + WDT0_RST);
 	wdog_dd->last_pet = sched_clock();
+	set_kcj_pet_time();
 	error = device_create_file(wdog_dd->dev, &dev_attr_disable);
 	if (error)
 		dev_err(wdog_dd->dev, "cannot create sysfs attribute\n");
@@ -511,9 +519,7 @@ static int __devinit msm_wdog_dt_to_pdata(struct platform_device *pdev,
 				__func__);
 		return -ENXIO;
 	}
-#ifdef CONFIG_LGE_HANDLE_PANIC
-	wdt_timer_set_timer0_base(pdata->base);
-#endif
+
 	pdata->bark_irq = platform_get_irq(pdev, 0);
 	pdata->bite_irq = platform_get_irq(pdev, 1);
 	ret = of_property_read_u32(node, "qcom,bark-time", &pdata->bark_time);

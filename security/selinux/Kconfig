@@ -1,3 +1,7 @@
+#
+# This software is contributed or developed by KYOCERA Corporation.
+# (C) 2014 KYOCERA Corporation
+#
 config SECURITY_SELINUX
 	bool "NSA SELinux Support"
 	depends on SECURITY_NETWORK && AUDIT && NET && INET
@@ -131,3 +135,11 @@ config SECURITY_SELINUX_POLICYDB_VERSION_MAX_VALUE
 	  installed under /etc/selinux/$SELINUXTYPE/policy, where
 	  SELINUXTYPE is defined in your /etc/selinux/config.
 
+config SECURITY_SELINUX_KC
+	  bool "SELinux KC expantion features"
+	  depends on SECURITY_SELINUX && SECURITY_PATH && SECURITY_KCPDSM
+	  default n
+	help
+	  This option added special security checking to several selinux
+	  hook functions. If you are unsure how to answer this question,
+	  answer n.

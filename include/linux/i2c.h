@@ -23,6 +23,12 @@
 
 /* With some changes from Kyösti Mälkki <kmalkki@cc.hut.fi> and
    Frodo Looijaard <frodol@dds.nl> */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2012 KYOCERA Corporation
+ * (C) 2013 KYOCERA Corporation
+ * (C) 2014 KYOCERA Corporation
+ */
 
 #ifndef _LINUX_I2C_H
 #define _LINUX_I2C_H
@@ -497,6 +503,12 @@ static inline int i2c_adapter_id(struct i2c_adapter *adap)
 			i2c_del_driver)
 
 #endif /* I2C */
+
+extern void i2c_compulsory_reset(struct i2c_adapter *adap, int scl, int sda);
+extern void i2c_reset_S7780A(struct i2c_adapter *adap);
+extern void i2c_reset_device(struct i2c_adapter *adap);
+extern void i2c_init_device(struct i2c_adapter *adap);
+
 #endif /* __KERNEL__ */
 
 /**

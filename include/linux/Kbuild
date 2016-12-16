@@ -1,3 +1,6 @@
+# This software is contributed or developed by KYOCERA Corporation.
+# (C) 2014 KYOCERA Corporation
+
 header-y += byteorder/
 header-y += can/
 header-y += caif/
@@ -99,7 +102,6 @@ header-y += comstats.h
 header-y += connector.h
 header-y += const.h
 header-y += cramfs_fs.h
-header-y += csdio.h
 header-y += cuda.h
 header-y += cyclades.h
 header-y += cycx_cfm.h
@@ -260,6 +262,7 @@ header-y += mroute6.h
 header-y += msdos_fs.h
 header-y += msg.h
 header-y += msm_adc.h
+header-y += msm_dsps.h
 header-y += msm_ion.h
 header-y += epm_adc.h
 header-y += mtio.h
@@ -324,6 +327,7 @@ header-y += ptp_clock.h
 header-y += ptrace.h
 header-y += qnx4_fs.h
 header-y += qnxtypes.h
+header-y += qrng.h
 header-y += quota.h
 header-y += radeonfb.h
 header-y += random.h
@@ -452,3 +456,5 @@ header-y += ci-bridge-spi.h
 header-y += msm_audio_amrwbplus.h
 header-y += avtimer.h
 header-y += msm_ipa.h
+header-y += msm_thermal_ioctl.h
+header-y += kc_hdmi.h

@@ -11,6 +11,11 @@
  *
  */
 
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
+ */
+
 #ifndef __ARCH_ARM_MACH_MSM_OTG_H
 #define __ARCH_ARM_MACH_MSM_OTG_H
 
@@ -58,6 +63,7 @@ struct msm_otg_ops {
 
 /* for usb host and peripheral controller drivers */
 #ifdef CONFIG_USB_MSM_OTG
+void msm_otg_change_charge_device(int usb_det, int pma_det);
 
 extern struct msm_otg_transceiver *msm_otg_get_transceiver(void);
 extern void msm_otg_put_transceiver(struct msm_otg_transceiver *xceiv);

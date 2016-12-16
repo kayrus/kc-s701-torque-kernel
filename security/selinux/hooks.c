@@ -18,6 +18,9 @@
  *  Copyright (C) 2007 Hitachi Software Engineering Co., Ltd.
  *		       Yuichi Nakamura <ynakam@hitachisoft.jp>
  *
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
+ *
  *	This program is free software; you can redistribute it and/or modify
  *	it under the terms of the GNU General Public License version 2,
  *	as published by the Free Software Foundation.
@@ -82,6 +85,9 @@
 #include <linux/export.h>
 #include <linux/msg.h>
 #include <linux/shm.h>
+#ifdef CONFIG_SECURITY_SELINUX_KC
+#include <linux/kcpdsm.h>
+#endif
 
 #include "avc.h"
 #include "objsec.h"
@@ -130,6 +136,33 @@ int selinux_enabled = 1;
 
 static struct kmem_cache *sel_inode_cache;
 
+#define KC_KBFM_DISABLE 0
+#define KC_KBFM_ENABLE  1
+static int kc_kbfm = KC_KBFM_DISABLE;
+static int __init kc_kbfm_setup(char *buf)
+{
+	if (strcmp(buf, "kcfactory") == 0)
+		kc_kbfm = KC_KBFM_ENABLE;
+	return 0;
+}
+early_param("androidboot.mode", kc_kbfm_setup);
+
+#define KC_BOOTMODE_NORMAL 0
+#define KC_BOOTMODE_UPDATE 1
+static int kc_bootmode = KC_BOOTMODE_NORMAL;
+static int __init kc_bootmode_setup(char *buf)
+{
+	if (strcmp(buf, "f-ksg") == 0)
+		kc_bootmode = KC_BOOTMODE_UPDATE;
+	return 0;
+}
+early_param("kcdroidboot.mode", kc_bootmode_setup);
+
+#ifdef KC_SELINUX_DEBUG
+#define KC_IN_SPECIAL_MODE (1)
+#else
+#define KC_IN_SPECIAL_MODE (kc_bootmode == KC_BOOTMODE_UPDATE || kc_kbfm == KC_KBFM_ENABLE)
+#endif
 /**
  * selinux_secmark_enabled - Check to see if SECMARK is currently enabled
  *
@@ -1888,6 +1921,22 @@ static int selinux_ptrace_access_check(struct task_struct *child,
 	if (rc)
 		return rc;
 
+#ifdef CONFIG_SECURITY_SELINUX_KC
+	if (current_uid() != 0)
+		goto out_kc;
+
+	if (mode & PTRACE_MODE_READ)
+		goto out_kc;
+
+	if (current->pid != debuggerd_pid()) {
+		pr_err("no permission in %s pid=%d pname=%s child=%s mode=%d\n",
+		       __FUNCTION__, current->pid, current->comm, child->comm, mode);
+		if (!KC_IN_SPECIAL_MODE)
+			return -EPERM;
+	}
+
+out_kc:
+#endif
 	if (mode & PTRACE_MODE_READ) {
 		u32 sid = current_sid();
 		u32 csid = task_sid(child);
@@ -2582,6 +2631,12 @@ static int selinux_sb_statfs(struct dentry *dentry)
 	return superblock_has_perm(cred, dentry->d_sb, FILESYSTEM__GETATTR, &ad);
 }
 
+#ifdef CONFIG_SECURITY_SELINUX_KC
+#define KC_SYSTEM_MOUNT_POINT "/system"
+#define KC_SYSTEM_PROPERTY "/pstore"
+#define KC_SYSTEM_MOUNT_SRC "/dev/block/platform/msm_sdcc.1/by-name/system"
+#endif
+
 static int selinux_mount(char *dev_name,
 			 struct path *path,
 			 char *type,
@@ -2589,6 +2644,47 @@ static int selinux_mount(char *dev_name,
 			 void *data)
 {
 	const struct cred *cred = current_cred();
+#ifdef CONFIG_SECURITY_SELINUX_KC
+	char *ptr, *realpath;
+
+	ptr = kmalloc(PATH_MAX, GFP_KERNEL);
+	if (!ptr)
+		return -ENOMEM;
+
+	realpath = d_path(path, ptr, PATH_MAX);
+
+	if (strncmp(realpath, KC_SYSTEM_MOUNT_POINT,
+		    strlen(KC_SYSTEM_MOUNT_POINT)) != 0)
+		goto out_kc;
+
+	if (strcmp(realpath, KC_SYSTEM_MOUNT_POINT) != 0) {
+		if (current->pid == 1) {
+			goto out_kc;
+		} else {
+			pr_warn("no permission mount /system/... by non-init process in %s pid=%d pname=%s realpath=%s dev_name=%s\n",
+				__FUNCTION__, current->pid, current->comm, realpath, dev_name);
+			goto out_kc_err;
+		}
+	}
+
+	if (flags & MS_REMOUNT && !(flags & MS_RDONLY)) {
+		goto out_kc_err;
+	}
+	if (strcmp(dev_name, KC_SYSTEM_MOUNT_SRC) == 0)
+		goto out_kc;
+
+out_kc_err:
+	pr_warn("no permission in %s pid=%d pname=%s realpath=%s dev_name=%s\n",
+		__FUNCTION__, current->pid, current->comm, realpath, dev_name);
+
+	if (!KC_IN_SPECIAL_MODE) {
+		kfree(ptr);
+		return -EPERM;
+	}
+
+out_kc:
+	kfree(ptr);
+#endif
 
 	if (flags & MS_REMOUNT)
 		return superblock_has_perm(cred, path->dentry->d_sb,
@@ -2600,7 +2696,38 @@ static int selinux_mount(char *dev_name,
 static int selinux_umount(struct vfsmount *mnt, int flags)
 {
 	const struct cred *cred = current_cred();
+#ifdef CONFIG_SECURITY_SELINUX_KC
+	struct path umount_path;
+	char *ptr, *realpath;
 
+	ptr = kmalloc(PATH_MAX, GFP_KERNEL);
+	if(!ptr)
+		return -ENOMEM;
+
+	umount_path.mnt = mnt;
+	umount_path.dentry = mnt->mnt_root;
+
+	realpath = d_path(&umount_path, ptr, PATH_MAX);
+
+	if (strcmp(realpath, KC_SYSTEM_MOUNT_POINT) != 0 &&
+	    strcmp(realpath, KC_SYSTEM_PROPERTY) != 0 )
+		goto out_kc;
+
+	if (strcmp(realpath, KC_SYSTEM_PROPERTY) == 0)
+		if (fs_mgr_pid() == current->pid)
+			goto out_kc;
+
+	pr_warn("no permission in %s pid=%d pname=%s realpath=%s\n",
+		__FUNCTION__, current->pid, current->comm, realpath);
+
+	if (!KC_IN_SPECIAL_MODE) {
+		kfree(ptr);
+		return -EPERM;
+	}
+
+out_kc:
+	kfree(ptr);
+#endif
 	return superblock_has_perm(cred, mnt->mnt_sb,
 				   FILESYSTEM__UNMOUNT, NULL);
 }
@@ -5073,6 +5200,58 @@ static int selinux_msg_queue_msgrcv(struct msg_queue *msq, struct msg_msg *msg,
 	return rc;
 }
 
+#ifdef CONFIG_SECURITY_SELINUX_KC
+static int selinux_path_chroot(struct path *path)
+{
+	pr_warn("no permission in %s pid=%d pname=%s\n",
+		__FUNCTION__, current->pid, current->comm);
+
+	if (KC_IN_SPECIAL_MODE)
+		return 0;
+	else
+		return -EPERM;
+}
+
+static int selinux_sb_pivotroot(struct path *old_path, struct path *new_path)
+{
+	pr_warn("no permission in %s pid=%d pname=%s\n",
+		__FUNCTION__, current->pid, current->comm);
+
+	if (KC_IN_SPECIAL_MODE)
+		return 0;
+	else
+		return -EPERM;
+}
+#endif
+
+#ifdef CONFIG_SECURITY_SELINUX_KC
+static const char *kc_module_checklist[] = {
+	"wlan",
+	NULL,
+};
+static int selinux_kernel_setup_load_info(char *kmod_name)
+{
+	int i;
+
+	/* Only init process can insmod as root */
+	if (current_uid() == 0 && current->pid != 1)
+		goto err;
+
+	for (i = 0; kc_module_checklist[i] != NULL; i++)
+		if (strcmp(kc_module_checklist[i], kmod_name) == 0)
+			return 0;
+
+err:
+	pr_warn("no permission in %s pid=%d pname=%s module=%s\n",
+		__FUNCTION__, current->pid, current->comm, kmod_name);
+
+	if (KC_IN_SPECIAL_MODE)
+		return 0;
+	else
+		return -EPERM;
+}
+#endif
+
 /* Shared Memory security operations */
 static int selinux_shm_alloc_security(struct shmid_kernel *shp)
 {
@@ -5695,6 +5874,12 @@ static struct security_operations selinux_ops = {
 	.msg_queue_msgctl =		selinux_msg_queue_msgctl,
 	.msg_queue_msgsnd =		selinux_msg_queue_msgsnd,
 	.msg_queue_msgrcv =		selinux_msg_queue_msgrcv,
+
+#ifdef CONFIG_SECURITY_SELINUX_KC
+	.path_chroot = 			selinux_path_chroot,
+	.sb_pivotroot = 		selinux_sb_pivotroot,
+	.kernel_setup_load_info =	selinux_kernel_setup_load_info,
+#endif
 
 	.shm_alloc_security =		selinux_shm_alloc_security,
 	.shm_free_security =		selinux_shm_free_security,

@@ -1,3 +1,7 @@
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
+ */
 /* arch/arm/mach-msm/include/mach/board.h
  *
  * Copyright (C) 2007 Google, Inc.
@@ -183,7 +187,7 @@ struct msm_gpio_set_tbl {
 };
 
 struct msm_camera_gpio_num_info {
-	uint16_t gpio_num[2];
+	uint16_t gpio_num[7];
 };
 
 struct msm_camera_gpio_conf {
@@ -513,6 +517,10 @@ struct msm_mhl_platform_data {
 /**
  * msm_i2c_platform_data: i2c-qup driver configuration data
  *
+ * @clk_ctl_xfer : When true, the clocks's state (prepare_enable/
+ *       unprepare_disable) is controlled by i2c-transaction's begining and
+ *       ending. When false, the clock's state is controlled by runtime-pm
+ *       events.
  * @active_only when set, votes when system active and removes the vote when
  *       system goes idle (optimises for performance). When unset, voting using
  *       runtime pm (optimizes for power).
@@ -521,6 +529,7 @@ struct msm_mhl_platform_data {
  */
 struct msm_i2c_platform_data {
 	int clk_freq;
+	bool clk_ctl_xfer;
 	uint32_t rmutex;
 	const char *rsl_id;
 	uint32_t pm_lat;
@@ -669,6 +678,8 @@ void msm_snddev_tx_route_config(void);
 void msm_snddev_tx_route_deconfig(void);
 
 extern phys_addr_t msm_shared_ram_phys; /* defined in arch/arm/mach-msm/io.c */
+
+int oem_is_off_charge(void);
 
 
 #endif

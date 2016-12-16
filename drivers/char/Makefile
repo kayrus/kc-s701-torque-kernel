@@ -1,3 +1,6 @@
+# This software is contributed or developed by KYOCERA Corporation.
+# (C) 2014 KYOCERA Corporation
+#
 #
 # Makefile for the kernel character device drivers.
 #
@@ -65,6 +68,11 @@ js-rtc-y = rtc.o
 
 obj-$(CONFIG_TILE_SROM)		+= tile-srom.o
 obj-$(CONFIG_MSM_ROTATOR)	+= msm_rotator.o
-obj-$(CONFIG_MMC_GENERIC_CSDIO)	+= csdio.o
 obj-$(CONFIG_DIAG_CHAR)		+= diag/
+obj-y	+= dnand_cdev_driver.o
+obj-y	+= dnand_k_api.o
+obj-y	+= dnand_fs.o
+obj-y	+= dnand_drv.o
 obj-$(CONFIG_MSM_ADSPRPC)       += adsprpc.o
+obj-y += key_dm_driver.o
+obj-$(CONFIG_MSM_RDBG)       += rdbg.o

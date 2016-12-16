@@ -1,3 +1,6 @@
+# This software is contributed or developed by KYOCERA Corporation.
+# (C) 2014 KYOCERA Corporation
+#
 menuconfig POWER_SUPPLY
 	tristate "Power supply class support"
 	help
@@ -495,39 +498,22 @@ config QPNP_BMS
 	  Say Y here to enable support for QPNP chip bms device.
 	  It registers a fuelgauge bms power supply to report
 	  State of Charge.
-
-config MAX17048_FUELGAUGE
-	tristate "Maxim MAX17048 fuel gauging external driver"
-	depends on I2C
-	default n
-	help
-	  MAX17048 is fuel-gauge systems for lithium-ion (Li+) batteries
-	  in handheld and portable equipment. The MAX17048 is configured
-	  to operate with a single lithium cell
-
-config BQ51013B_CHARGER
-	tristate "TI BQ51013B wireless charger driver"
-	default n
-	help
-	  The BQ51013B is an devices for wireless power transfer in portable
-	  applications. The BQ51013B provide the AC/DC power conversion while
-	  intergrating the digital control required to comply with Qi v1.1
-	  protocol.
-
-config BQ24192_CHARGER
-	tristate "TI BQ24192 charger driver"
-	depends on I2C
-	default n
-	help
-	  The BQ24192 is a highly-integrated switch-mode battery charge
-	  management and system power path management device for 1 cell
-	  Li-Ion and Li-Polymer battery.
-
-config BATTERY_TEMP_CONTROL
-	bool "Battery Temperature Control Configuration"
-	default n
-	help
-	  Say Y to enable battery temperature control for safety.
-	  It controls charging current depending on battery temperature.
-
+config OEM_CHARGER_CMD
+	tristate "OEM Charger Command support"
+	default y
+config OEM_BATT_LED
+	tristate "OEM Battery Led support"
+	default y
+config OEM_HKADC
+	tristate "OEM HKADC support"
+	default y
+config OEM_CHG_DET
+	tristate "OEM Charger Detect support"
+	default y
+config OEM_CHG_PARAM
+    tristate "OEM Charge Parameters support"
+	default y
+config OEM_HKADC_USB_TM
+	tristate "OEM USB Temperature Monitor support"
+	default y
 endif # POWER_SUPPLY

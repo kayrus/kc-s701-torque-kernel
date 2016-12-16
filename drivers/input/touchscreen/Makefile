@@ -1,4 +1,7 @@
 #
+# This software is contributed or developed by KYOCERA Corporation.
+# (C) 2014 KYOCERA Corporation
+#
 # Makefile for the touchscreen drivers.
 #
 
@@ -14,6 +17,7 @@ obj-$(CONFIG_TOUCHSCREEN_AD7879_SPI)	+= ad7879-spi.o
 obj-$(CONFIG_TOUCHSCREEN_ADS7846)	+= ads7846.o
 obj-$(CONFIG_TOUCHSCREEN_ATMEL_MAXTOUCH)	+= atmel_maxtouch.o
 obj-$(CONFIG_TOUCHSCREEN_ATMEL_MXT)	+= atmel_mxt_ts.o
+obj-$(CONFIG_TOUCHSCREEN_ATMEL_MAXTOUCH_TS)	+= atmel_maxtouch_ts.o
 obj-$(CONFIG_TOUCHSCREEN_ATMEL_TSADCC)	+= atmel_tsadcc.o
 obj-$(CONFIG_TOUCHSCREEN_AUO_PIXCIR)	+= auo-pixcir-ts.o
 obj-$(CONFIG_TOUCHSCREEN_BITSY)		+= h3600_ts_input.o
@@ -78,11 +82,65 @@ obj-$(CONFIG_TOUCHSCREEN_TPS6507X)	+= tps6507x-ts.o
 obj-$(CONFIG_TOUCHSCREEN_MSM_LEGACY)		+= msm_touch.o
 obj-$(CONFIG_TOUCHSCREEN_CY8C_TS)	+= cy8c_ts.o
 obj-$(CONFIG_TOUCHSCREEN_CYTTSP_I2C_QC)       += cyttsp-i2c-qc.o
-obj-$(CONFIG_TOUCHSCREEN_LGE_SYNAPTICS) += touch_synaptics.o
-obj-$(CONFIG_TOUCHSCREEN_LGE_SYNAPTICS) += touch_synaptics_ds4_fw_upgrade.o
-obj-$(CONFIG_TOUCHSCREEN_LGE_SYNAPTICS) += touch_synaptics_ds5.o
-obj-$(CONFIG_TOUCHSCREEN_LGE_SYNAPTICS) += touch_synaptics_ds5_fw_upgrade.o
 obj-$(CONFIG_TOUCHSCREEN_FT5X06)	+= ft5x06_ts.o
 obj-$(CONFIG_TOUCHSCREEN_SYNAPTICS_I2C_RMI4)		+= synaptics_i2c_rmi4.o
 obj-$(CONFIG_TOUCHSCREEN_SYNAPTICS_DSX_RMI4_DEV)	+= synaptics_rmi_dev.o
 obj-$(CONFIG_TOUCHSCREEN_SYNAPTICS_DSX_FW_UPDATE) 	+= synaptics_fw_update.o
+obj-$(CONFIG_TOUCHSCREEN_GT9XX)		+= gt9xx/
+obj-y 					+= ts_ctrl.o
+obj-$(CONFIG_CYPRESS_CYTTSP4_BUS) += cyttsp4_bus.o
+obj-$(CONFIG_TOUCHSCREEN_CYPRESS_CYTTSP4)	+= cyttsp4_core.o
+ifdef CONFIG_TOUCHSCREEN_CYPRESS_CYTTSP4
+obj-y += cyttsp4_platform.o
+endif
+obj-$(CONFIG_TOUCHSCREEN_CYPRESS_CYTTSP4_I2C)	+= cyttsp4_i2c.o
+obj-$(CONFIG_TOUCHSCREEN_CYPRESS_CYTTSP4_SPI)	+= cyttsp4_spi.o
+obj-$(CONFIG_TOUCHSCREEN_CYPRESS_CYTTSP4_MT_A)	+= cyttsp4_mt_a.o
+cyttsp4_mt_a-y := cyttsp4_mta.o cyttsp4_mt_common.o
+obj-$(CONFIG_TOUCHSCREEN_CYPRESS_CYTTSP4_MT_B)	+= cyttsp4_mt_b.o
+cyttsp4_mt_b-y := cyttsp4_mtb.o cyttsp4_mt_common.o
+obj-$(CONFIG_TOUCHSCREEN_CYPRESS_CYTTSP4_BUTTON)	+= cyttsp4_btn.o
+obj-$(CONFIG_TOUCHSCREEN_CYPRESS_CYTTSP4_PROXIMITY)	+= cyttsp4_proximity.o
+obj-$(CONFIG_TOUCHSCREEN_CYPRESS_CYTTSP4_DEVICE_ACCESS)	+= cyttsp4_device_access.o
+obj-$(CONFIG_TOUCHSCREEN_CYPRESS_CYTTSP4_TEST_DEVICE_ACCESS_API)	+= cyttsp4_test_device_access_api.o
+obj-$(CONFIG_TOUCHSCREEN_CYPRESS_CYTTSP4_LOADER)	+= cyttsp4_loader.o
+obj-$(CONFIG_TOUCHSCREEN_CYPRESS_CYTTSP4_DEBUG_MODULE)	+= cyttsp4_debug.o
+obj-$(CONFIG_TOUCHSCREEN_CYPRESS_CYTTSP4_DEVICETREE_SUPPORT)	+= cyttsp4_devtree.o
+ifeq ($(CONFIG_TOUCHSCREEN_CYPRESS_CYTTSP4_DEBUG),y)
+CFLAGS_cyttsp4_bus.o += -DDEBUG
+CFLAGS_cyttsp4_core.o += -DDEBUG
+CFLAGS_cyttsp4_i2c.o += -DDEBUG
+CFLAGS_cyttsp4_spi.o += -DDEBUG
+CFLAGS_cyttsp4_mta.o += -DDEBUG
+CFLAGS_cyttsp4_mtb.o += -DDEBUG
+CFLAGS_cyttsp4_mt_a.o += -DDEBUG
+CFLAGS_cyttsp4_mt_b.o += -DDEBUG
+CFLAGS_cyttsp4_mt_common.o += -DDEBUG
+CFLAGS_cyttsp4_btn.o += -DDEBUG
+CFLAGS_cyttsp4_proximity.o += -DDEBUG
+CFLAGS_cyttsp4_device_access.o += -DDEBUG
+CFLAGS_cyttsp4_loader.o += -DDEBUG
+CFLAGS_cyttsp4_debug.o += -DDEBUG
+CFLAGS_cyttsp4_devtree.o += -DDEBUG
+CFLAGS_cyttsp4_platform.o += -DDEBUG
+endif
+
+ifeq ($(CONFIG_TOUCHSCREEN_CYPRESS_CYTTSP4_VDEBUG),y)
+CFLAGS_cyttsp4_bus.o += -DVERBOSE_DEBUG
+CFLAGS_cyttsp4_core.o += -DVERBOSE_DEBUG
+CFLAGS_cyttsp4_i2c.o += -DVERBOSE_DEBUG
+CFLAGS_cyttsp4_spi.o += -DVERBOSE_DEBUG
+CFLAGS_cyttsp4_mta.o += -DVERBOSE_DEBUG
+CFLAGS_cyttsp4_mtb.o += -DVERBOSE_DEBUG
+CFLAGS_cyttsp4_mt_a.o += -DVERBOSE_DEBUG
+CFLAGS_cyttsp4_mt_b.o += -DVERBOSE_DEBUG
+CFLAGS_cyttsp4_mt_common.o += -DVERBOSE_DEBUG
+CFLAGS_cyttsp4_btn.o += -DVERBOSE_DEBUG
+CFLAGS_cyttsp4_proximity.o += -DVERBOSE_DEBUG
+CFLAGS_cyttsp4_device_access.o += -DVERBOSE_DEBUG
+CFLAGS_cyttsp4_loader.o += -DVERBOSE_DEBUG
+CFLAGS_cyttsp4_debug.o += -DVERBOSE_DEBUG
+CFLAGS_cyttsp4_devtree.o += -DVERBOSE_DEBUG
+CFLAGS_cyttsp4_platform.o += -DVERBOSE_DEBUG
+endif
+

@@ -15,6 +15,11 @@
  * Rewrote bits to get rid of console_lock
  *	01Mar01 Andrew Morton
  */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2012 KYOCERA Corporation
+ * (C) 2014 KYOCERA Corporation
+ */
 
 #include <linux/kernel.h>
 #include <linux/mm.h>
@@ -686,20 +691,14 @@ static void call_console_drivers(unsigned start, unsigned end)
 	start_print = start;
 	while (cur_index != end) {
 		if (msg_level < 0 && ((end - cur_index) > 2)) {
-			/*
-			 * prepare buf_prefix, as a contiguous array,
-			 * to be processed by log_prefix function
+			/* do not strip log prefix, just get msg_level
+			 *
+			 * original code:
+			 *
+			 * cur_index += log_prefix(&LOG_BUF(cur_index), &msg_level, NULL);
+			 * start_print = cur_index;
 			 */
-			char buf_prefix[SYSLOG_PRI_MAX_LENGTH+1];
-			unsigned i;
-			for (i = 0; i < ((end - cur_index)) && (i < SYSLOG_PRI_MAX_LENGTH); i++) {
-				buf_prefix[i] = LOG_BUF(cur_index + i);
-			}
-			buf_prefix[i] = '\0'; /* force '\0' as last string character */
-
-			/* strip log prefix */
-			cur_index += log_prefix((const char *)&buf_prefix, &msg_level, NULL);
-			start_print = cur_index;
+			log_prefix(&LOG_BUF(cur_index), &msg_level, NULL);
 		}
 		while (cur_index != end) {
 			char c = LOG_BUF(cur_index);
@@ -970,6 +969,14 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 		}
 	}
 
+	/* Drop a log that do not match console_loglevel */
+	if (current_log_level >= console_loglevel) {
+		printed_len = 0;
+		printk_cpu = UINT_MAX;
+		raw_spin_unlock(&logbuf_lock);
+		goto out_restore_lockdep;
+	}
+
 	/*
 	 * Copy the output into log_buf. If the caller didn't provide
 	 * the appropriate log prefix, we insert them here
@@ -992,6 +999,13 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 				emit_log_char('>');
 				printed_len += 3;
 			}
+
+			/* add cpuid format:"#[0-9*]" */
+			emit_log_char('#');
+			if (printk_cpu < 10)
+				emit_log_char(printk_cpu + '0');
+			else
+				emit_log_char('*');
 
 			if (printk_time) {
 				/* Add the current time stamp */
@@ -1033,6 +1047,7 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 	if (console_trylock_for_printk(this_cpu))
 		console_unlock();
 
+out_restore_lockdep:
 	lockdep_on();
 out_restore_irqs:
 	local_irq_restore(flags);
@@ -1185,13 +1200,6 @@ module_param_named(console_suspend, console_suspend_enabled,
 MODULE_PARM_DESC(console_suspend, "suspend console during suspend"
 	" and hibernate operations");
 
-
-/* check current suspend/resume status of the console */
-int is_console_suspended(void)
-{
-	return console_suspended;
-}
-
 /**
  * suspend_console - suspend the console subsystem
  *
@@ -1342,6 +1350,24 @@ void wake_up_klogd(void)
 		this_cpu_or(printk_pending, PRINTK_PENDING_WAKEUP);
 }
 
+void log_output_console( void )
+{
+	unsigned	_con_start, _log_end;
+
+	if ( console_sem.count <= 0 )
+	{
+		printk( "Console LOCKED!\n" );
+
+		while( con_start != log_end )
+		{
+			_con_start = con_start;
+			_log_end = log_end;
+			con_start = log_end;		/* Flush */
+			call_console_drivers( _con_start, _log_end );
+		}
+	}
+}
+
 /**
  * console_unlock - unlock the console system
  *
@@ -1405,8 +1431,11 @@ again:
 		retry = 1;
 	raw_spin_unlock_irqrestore(&logbuf_lock, flags);
 
-	if (retry && console_trylock())
+	if (retry && console_trylock()) {
+		/* clear retry to avoid softlockup */
+		retry = 0;
 		goto again;
+	}
 
 	if (wake_klogd)
 		wake_up_klogd();

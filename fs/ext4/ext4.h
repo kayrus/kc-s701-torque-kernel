@@ -593,6 +593,7 @@ enum {
 #define EXT4_IOC_ALLOC_DA_BLKS		_IO('f', 12)
 #define EXT4_IOC_MOVE_EXT		_IOWR('f', 15, struct move_extent)
 #define EXT4_IOC_RESIZE_FS		_IOW('f', 16, __u64)
+#define EXT4_IOC_INODE_JIFFIES		_IOR('f', 19, unsigned long)
 
 #if defined(__KERNEL__) && defined(CONFIG_COMPAT)
 /*
@@ -908,6 +909,8 @@ struct ext4_inode_info {
 	 */
 	tid_t i_sync_tid;
 	tid_t i_datasync_tid;
+
+	unsigned long           created_when; /* jiffies of creation time */
 };
 
 /*

@@ -5,6 +5,9 @@
  * Copyright (C) 2001-2002 Greg Kroah-Hartman <greg@kroah.com>
  * Copyright (C) 2001 Networks Associates Technology, Inc <ssmalley@nai.com>
  *
+ *  This software is contributed or developed by KYOCERA Corporation.
+ *  (C) 2014 KYOCERA Corporation
+ *
  *	This program is free software; you can redistribute it and/or modify
  *	it under the terms of the GNU General Public License as published by
  *	the Free Software Foundation; either version 2 of the License, or
@@ -775,6 +778,11 @@ int security_kernel_create_files_as(struct cred *new, struct inode *inode)
 int security_kernel_module_request(char *kmod_name)
 {
 	return security_ops->kernel_module_request(kmod_name);
+}
+
+int security_kernel_setup_load_info(char *kmod_name)
+{
+	return security_ops->kernel_setup_load_info(kmod_name);
 }
 
 int security_task_fix_setuid(struct cred *new, const struct cred *old,

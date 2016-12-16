@@ -1,6 +1,9 @@
 #
 # Makefile for building the SELinux module as part of the kernel tree.
 #
+ifneq ($(TARGET_BUILD_VARIANT),user)
+CFLAGS_hooks.o += -DKC_SELINUX_DEBUG
+endif
 
 obj-$(CONFIG_SECURITY_SELINUX) := selinux.o
 

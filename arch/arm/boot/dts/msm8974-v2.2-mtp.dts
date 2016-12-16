@@ -16,7 +16,7 @@
 /include/ "msm8974-mtp.dtsi"
 
 / {
-	model = "Qualcomm MSM 8974v2 MTP";
+	model = "Qualcomm MSM 8974v2.2 MTP";
 	compatible = "qcom,msm8974-mtp", "qcom,msm8974", "qcom,mtp";
 	qcom,msm-id = <126 8 0x20002>,
 		      <185 8 0x20002>,

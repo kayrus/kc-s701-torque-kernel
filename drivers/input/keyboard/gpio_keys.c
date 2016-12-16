@@ -1,4 +1,9 @@
 /*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2013 KYOCERA Corporation
+ * (C) 2014 KYOCERA Corporation
+ */
+/*
  * Driver for keys on GPIO lines capable of generating interrupts.
  *
  * Copyright 2005 Phil Blundell
@@ -29,11 +34,21 @@
 #include <linux/of_platform.h>
 #include <linux/of_gpio.h>
 #include <linux/spinlock.h>
+#include <linux/key_dm_driver.h>
+#include <mach/kc_board.h>
+
+#ifdef DEBUG_KEYLOG_ENABLE
+#define KEY_LOG_PRINT(fmt, ...) printk(KERN_DEBUG fmt, ##__VA_ARGS__)
+#else
+#define KEY_LOG_PRINT(fmt, ...)
+#endif
 
 struct gpio_button_data {
-	const struct gpio_keys_button *button;
+/*	const struct gpio_keys_button *button; */
+	struct gpio_keys_button *button;
 	struct input_dev *input;
 	struct timer_list timer;
+	struct timer_list volkey_timer;
 	struct work_struct work;
 	unsigned int timer_debounce;	/* in msecs */
 	unsigned int irq;
@@ -50,6 +65,41 @@ struct gpio_keys_drvdata {
 	void (*disable)(struct device *dev);
 	struct gpio_button_data data[0];
 };
+
+struct gpio_keys_chattering_state {
+	unsigned int code;	/* input event code (KEY_*, SW_*) */
+	bool is_on;		/* weather key is on. */
+};
+
+static struct gpio_keys_chattering_state gpio_keys_chattering_data[] = {
+	{
+		KEY_VOLUMEUP, false
+	},
+	{
+		KEY_VOLUMEDOWN, false
+	},
+	{
+		KEY_SEND, false
+	},
+	{
+		KEY_SOUND, false
+	},
+	{
+		KEY_CAMERA, false
+	},
+	{
+		KEY_MENU, false
+	},
+	{
+		KEY_HOME, false
+	},
+	{
+		KEY_BACK, false
+	},
+};
+
+static int g_kdm_check = 0;
+static int g_kdm_keycode = 0;
 
 /*
  * SYSFS interface for enabling/disabling keys and switches:
@@ -119,9 +169,13 @@ static void gpio_keys_disable_button(struct gpio_button_data *bdata)
 		 * Disable IRQ and possible debouncing timer.
 		 */
 		disable_irq(bdata->irq);
+#ifdef QUALCOMM_ORIGINAL_FEATURE
 		if (bdata->timer_debounce)
 			del_timer_sync(&bdata->timer);
-
+#else
+		if (bdata->button->debounce_interval)
+			del_timer_sync(&bdata->timer);
+#endif
 		bdata->disabled = true;
 	}
 }
@@ -324,13 +378,178 @@ static struct attribute_group gpio_keys_attr_group = {
 	.attrs = gpio_keys_attrs,
 };
 
+unsigned char key_cmd(unsigned char cmd, int *val)
+{
+	unsigned char ret = 1;
+	KEY_LOG_PRINT("%s:  %d\n", __func__, cmd);
+	switch (cmd) {
+	case KEY_DM_CHECK_COMMAND:
+		KEY_LOG_PRINT("key_cmd check:%x val0:%x val1:%x \n", g_kdm_check, val[0], val[1]);
+		if (val[0]) {
+			g_kdm_check = 1;
+		} else {
+			g_kdm_check = 0;
+		}
+		ret = 0;
+		break;
+	case KEY_DM_KEY_GET_EVENT_COOMAND:
+		KEY_LOG_PRINT("key_cmd code:%x\n", g_kdm_keycode );
+		*val = g_kdm_keycode;
+		g_kdm_keycode = 0x00;
+		ret = 0;
+		break;
+	default:
+		printk(KERN_ERR "%s:  %d\n", __func__, cmd);
+		break;
+	}
+	return ret;
+}
+EXPORT_SYMBOL(key_cmd);
+
+void key_set_code(unsigned int code )
+{
+	KEY_LOG_PRINT("key_set_code code:%d \n", code);
+	g_kdm_keycode = code;
+}
+EXPORT_SYMBOL(key_set_code);
+
+static unsigned int gpio_keys_get_chattering_pos(unsigned int code)
+{
+	unsigned int i;
+	unsigned int size;
+
+	size = sizeof(gpio_keys_chattering_data) / sizeof(struct gpio_keys_chattering_state);
+
+	KEY_LOG_PRINT("key off chattering table size=%d \n",size);
+
+	for (i = 0 ; i < size; i++) {
+		if (gpio_keys_chattering_data[i].code == code) {
+			KEY_LOG_PRINT("find keycode=0x%x,table pos=%d\n", code, i);
+			return i;
+		}
+	}
+	KEY_LOG_PRINT("Can't find keycode=0x%x\n", code);
+	return 0xFFFFFFFF;
+}
+
+static void gpio_keys_set_stateon(unsigned int code)
+{
+	unsigned int pos;
+	pos = gpio_keys_get_chattering_pos(code);
+
+	if (pos != 0xFFFFFFFF) {
+		KEY_LOG_PRINT("gpio key 0x%x on\n", code);
+		gpio_keys_chattering_data[pos].is_on = true;
+	} else {
+		KEY_LOG_PRINT("gpio keyon pos invalid\n");
+	}
+}
+
+static void gpio_keys_set_stateoff(unsigned int code)
+{
+	unsigned int pos;
+	pos = gpio_keys_get_chattering_pos(code);
+
+	if (pos != 0xFFFFFFFF) {
+		KEY_LOG_PRINT("gpio key 0x%x off\n", code);
+		gpio_keys_chattering_data[pos].is_on = false;
+	} else {
+		KEY_LOG_PRINT("gpio keyoff pos invalid\n");
+	}
+}
+
+static bool gpio_keys_is_stateon(unsigned int code)
+{
+	unsigned int pos;
+	pos = gpio_keys_get_chattering_pos(code);
+
+	if (pos != 0xFFFFFFFF) {
+		KEY_LOG_PRINT("gpio key0x%x state ", code);
+		if (gpio_keys_chattering_data[pos].is_on == true) {
+			KEY_LOG_PRINT("on\n");
+			return true;
+		} else {
+			KEY_LOG_PRINT("off\n");
+			return false;
+		}
+	}
+	KEY_LOG_PRINT("gpio keystate pos invalid\n");
+	return false;
+}
+
+static struct _volkey_stat {
+	bool ignore;
+	bool state;
+} volkey_stat[2];
+
+static bool gpio_keys_smlpress_check(struct gpio_button_data *bdata, unsigned int code, bool state)
+{
+	int rp_code;
+	int vs_code;
+
+	if(KEY_VOLUMEUP != code
+	&& KEY_VOLUMEDOWN != code) {
+		KEY_LOG_PRINT("non vol key.\n");
+		return false;
+	}
+
+	if(KEY_VOLUMEUP == code) {
+		rp_code = 0;
+		vs_code = 1;
+	} else {
+		rp_code = 1;
+		vs_code = 0;
+	}
+
+	if(true == volkey_stat[rp_code].ignore) {
+		KEY_LOG_PRINT("[%d]key ignored.\n"rp_code);
+		return true;
+	}
+
+	volkey_stat[rp_code].state = state;
+
+	if(volkey_stat[rp_code].state != volkey_stat[vs_code].state) {
+		mod_timer(&bdata->volkey_timer,
+			jiffies + msecs_to_jiffies(300));
+	} else {
+		del_timer_sync(&bdata->volkey_timer);
+	}
+
+	if(0 == volkey_stat[rp_code].state
+	&& 0 == volkey_stat[vs_code].state) {
+		volkey_stat[rp_code].ignore = false;
+		volkey_stat[vs_code].ignore = false;
+	}
+
+	return false;
+}
+static void volkey_smlpress_timer(unsigned long _data)
+{
+	struct _volkey_stat *data = (struct _volkey_stat *)_data;
+
+	if(data[0].state != data[1].state) {
+		if(false == data[0].state) {
+			KEY_LOG_PRINT("ignored vol up key.\n");
+			data[0].ignore = true;
+		} else {
+			KEY_LOG_PRINT("ignored vol dn key.\n");
+			data[1].ignore = true;
+		}
+	} else {
+		data[0].ignore =false;
+		data[1].ignore =false;
+	}
+}
+
 static void gpio_keys_gpio_report_event(struct gpio_button_data *bdata)
 {
-	const struct gpio_keys_button *button = bdata->button;
+/* 	const struct gpio_keys_button *button = bdata->button; */
+	struct gpio_keys_button *button = bdata->button;
 	struct input_dev *input = bdata->input;
 	unsigned int type = button->type ?: EV_KEY;
 	int state = (gpio_get_value_cansleep(button->gpio) ? 1 : 0) ^ button->active_low;
 
+#ifdef QUALCOMM_ORIGINAL_FEATURE
 	if (type == EV_ABS) {
 		if (state)
 			input_event(input, type, button->code, button->value);
@@ -338,6 +557,42 @@ static void gpio_keys_gpio_report_event(struct gpio_button_data *bdata)
 		input_event(input, type, button->code, !!state);
 	}
 	input_sync(input);
+#else
+	bool is_on;
+
+	if (g_kdm_check) {
+		key_set_code(button->code);
+	} else {
+		if(gpio_keys_smlpress_check(bdata, button->code, !!state)) return;
+		KEY_LOG_PRINT("gpio_keys type:%x code:%x state:%x \n", type, button->code, state);
+		if (state) {
+			KEY_LOG_PRINT("gpio_keys active_cnt:%x \n", button->active_cnt);
+			if (button->active_cnt) {
+				KEY_LOG_PRINT("gpio_keys active_cnt-- \n");
+				button->active_cnt--;
+				mod_timer(&bdata->timer,
+					jiffies + msecs_to_jiffies(button->debounce_interval));
+			} else {
+				KEY_LOG_PRINT("gpio_keys set on \n");
+				button->active_cnt = ACTIVE_STATE_CNT;
+				gpio_keys_set_stateon(button->code);
+				KEY_LOG_PRINT("send on event \n");
+				input_event(input, type, button->code, !!state);
+				input_sync(input);
+			}
+		} else {
+			KEY_LOG_PRINT("gpio_keys set off \n");
+			button->active_cnt = ACTIVE_STATE_CNT;
+			is_on = gpio_keys_is_stateon(button->code);
+			gpio_keys_set_stateoff(button->code);
+			if (is_on) {
+				KEY_LOG_PRINT("send off event \n");
+				input_event(input, type, button->code, !!state);
+				input_sync(input);
+			}
+		}
+	}
+#endif
 }
 
 static void gpio_keys_gpio_work_func(struct work_struct *work)
@@ -361,11 +616,19 @@ static irqreturn_t gpio_keys_gpio_isr(int irq, void *dev_id)
 
 	BUG_ON(irq != bdata->irq);
 
+#ifdef QUALCOMM_ORIGINAL_FEATURE
 	if (bdata->timer_debounce)
 		mod_timer(&bdata->timer,
 			jiffies + msecs_to_jiffies(bdata->timer_debounce));
 	else
 		schedule_work(&bdata->work);
+#else /* QUALCOMM_ORIGINAL_FEATURE */
+	if (bdata->button->debounce_interval)
+		mod_timer(&bdata->timer,
+			jiffies + msecs_to_jiffies(bdata->button->debounce_interval));
+	else
+		schedule_work(&bdata->work);
+#endif /* QUALCOMM_ORIGINAL_FEATURE */
 
 	return IRQ_HANDLED;
 }
@@ -420,7 +683,8 @@ out:
 static int __devinit gpio_keys_setup_key(struct platform_device *pdev,
 					 struct input_dev *input,
 					 struct gpio_button_data *bdata,
-					 const struct gpio_keys_button *button)
+/*					 const struct gpio_keys_button *button) */
+					 struct gpio_keys_button *button)
 {
 	const char *desc = button->desc ? button->desc : "gpio_keys";
 	struct device *dev = &pdev->dev;
@@ -494,6 +758,8 @@ static int __devinit gpio_keys_setup_key(struct platform_device *pdev,
 		isr = gpio_keys_irq_isr;
 		irqflags = 0;
 	}
+	setup_timer(&bdata->volkey_timer,
+		volkey_smlpress_timer, (unsigned long)&volkey_stat);
 
 	input_set_capability(input, button->type ?: EV_KEY, button->code);
 
@@ -621,6 +887,7 @@ static struct of_device_id gpio_keys_of_match[] = {
 	{ .compatible = "gpio-keys", },
 	{ },
 };
+
 MODULE_DEVICE_TABLE(of, gpio_keys_of_match);
 
 #else
@@ -697,7 +964,8 @@ static int __devinit gpio_keys_probe(struct platform_device *pdev)
 		__set_bit(EV_REP, input->evbit);
 
 	for (i = 0; i < pdata->nbuttons; i++) {
-		const struct gpio_keys_button *button = &pdata->buttons[i];
+/*		const struct gpio_keys_button *button = &pdata->buttons[i]; */
+		struct gpio_keys_button *button = &pdata->buttons[i];
 		struct gpio_button_data *bdata = &ddata->data[i];
 
 		error = gpio_keys_setup_key(pdev, input, bdata, button);

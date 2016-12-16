@@ -15,6 +15,11 @@
  *
  */
 
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
+ */
+
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/poll.h>
@@ -67,6 +72,7 @@ static struct usb_interface_descriptor adb_interface_desc = {
 	.bInterfaceClass        = 0xFF,
 	.bInterfaceSubClass     = 0x42,
 	.bInterfaceProtocol     = 1,
+	.iInterface             = 0,
 };
 
 static struct usb_endpoint_descriptor adb_superspeed_in_desc = {
@@ -158,6 +164,23 @@ static struct usb_descriptor_header *ss_adb_descs[] = {
 
 static void adb_ready_callback(void);
 static void adb_closed_callback(void);
+
+static const char adb_interface[] = "Android ADB Interface";
+
+static struct usb_string adb_interface_string[] = {
+	{0, adb_interface},
+	{}
+};
+
+static struct usb_gadget_strings adb_interface_string_table = {
+	.language =		0x0409,
+	.strings =		adb_interface_string,
+};
+
+static struct usb_gadget_strings *adb_if_strings[] = {
+	&adb_interface_string_table,
+	NULL,
+};
 
 /* temporary variable used between adb_open() and adb_gadget_bind() */
 static struct adb_dev *_adb_dev;
@@ -661,8 +684,9 @@ static void adb_function_disable(struct usb_function *f)
 static int adb_bind_config(struct usb_configuration *c)
 {
 	struct adb_dev *dev = _adb_dev;
+	int rc = 0;
 
-	printk(KERN_INFO "adb_bind_config\n");
+	pr_debug("adb_bind_config\n");
 
 	dev->cdev = c->cdev;
 	dev->function.name = "adb";
@@ -674,6 +698,15 @@ static int adb_bind_config(struct usb_configuration *c)
 	dev->function.unbind = adb_function_unbind;
 	dev->function.set_alt = adb_function_set_alt;
 	dev->function.disable = adb_function_disable;
+	dev->function.strings = adb_if_strings;
+
+	if (adb_interface_string[0].id == 0) {
+		rc = usb_string_id(c->cdev);
+		if (unlikely(rc < 0))
+			return -ENODEV;
+		adb_interface_string[0].id = rc;
+		adb_interface_desc.iInterface = rc;
+	}
 
 	return usb_add_function(c, &dev->function);
 }

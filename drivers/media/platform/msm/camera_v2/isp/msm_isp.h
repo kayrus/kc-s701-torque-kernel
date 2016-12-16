@@ -9,6 +9,10 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
+ */
 
 #ifndef __MSM_VFE_H__
 #define __MSM_VFE_H__
@@ -19,6 +23,7 @@
 #include <linux/io.h>
 #include <linux/list.h>
 #include <linux/delay.h>
+#include <linux/avtimer.h>
 #include <media/v4l2-subdev.h>
 #include <media/msmb_isp.h>
 #include <mach/msm_bus.h>
@@ -35,6 +40,10 @@
 #define MAX_INIT_FRAME_DROP 31
 #define ISP_Q2 (1 << 2)
 
+#define AVTIMER_MSW_PHY_ADDR 0xFE05300C
+#define AVTIMER_LSW_PHY_ADDR 0xFE053008
+#define AVTIMER_ITERATION_CTR 16
+
 #define VFE_PING_FLAG 0xFFFFFFFF
 #define VFE_PONG_FLAG 0x0
 
@@ -49,6 +58,16 @@ struct vfe_subscribe_info {
 	uint32_t active;
 };
 
+enum msm_isp_pack_fmt {
+	QCOM,
+	MIPI,
+	DPCM6,
+	DPCM8,
+	PLAIN8,
+	PLAIN16,
+	MAX_ISP_PACK_FMT,
+};
+
 enum msm_isp_camif_update_state {
 	NO_UPDATE,
 	ENABLE_CAMIF,
@@ -56,9 +75,17 @@ enum msm_isp_camif_update_state {
 	DISABLE_CAMIF_IMMEDIATELY
 };
 
+enum msm_isp_reset_type {
+	ISP_RST_HARD,
+	ISP_RST_SOFT,
+	ISP_RST_MAX
+};
+
 struct msm_isp_timestamp {
 	/*Monotonic clock for v4l2 buffer*/
 	struct timeval buf_time;
+	/*Monotonic clock for VT */
+	struct timeval vt_time;
 	/*Wall clock for userspace event*/
 	struct timeval event_time;
 };
@@ -89,8 +116,9 @@ struct msm_vfe_axi_ops {
 		uint32_t reload_mask);
 	void (*enable_wm) (struct vfe_device *vfe_dev,
 		uint8_t wm_idx, uint8_t enable);
-	void (*cfg_io_format) (struct vfe_device *vfe_dev,
-		struct msm_vfe_axi_stream *stream_info);
+	int32_t (*cfg_io_format) (struct vfe_device *vfe_dev,
+		enum msm_vfe_axi_stream_src stream_src,
+		uint32_t io_format);
 	void (*cfg_framedrop) (struct vfe_device *vfe_dev,
 		struct msm_vfe_axi_stream *stream_info);
 	void (*clear_framedrop) (struct vfe_device *vfe_dev,
@@ -129,7 +157,8 @@ struct msm_vfe_axi_ops {
 
 struct msm_vfe_core_ops {
 	void (*reg_update) (struct vfe_device *vfe_dev);
-	long (*reset_hw) (struct vfe_device *vfe_dev);
+	long (*reset_hw) (struct vfe_device *vfe_dev,
+		enum msm_isp_reset_type reset_type);
 	int (*init_hw) (struct vfe_device *vfe_dev);
 	void (*init_hw_reg) (struct vfe_device *vfe_dev);
 	void (*release_hw) (struct vfe_device *vfe_dev);
@@ -207,12 +236,21 @@ enum msm_vfe_axi_state {
 	AVALIABLE,
 	INACTIVE,
 	ACTIVE,
-	PAUSE,
+	PAUSED,
 	START_PENDING,
 	STOP_PENDING,
+	PAUSE_PENDING,
+	RESUME_PENDING,
 	STARTING,
 	STOPPING,
-	PAUSE_PENDING,
+	PAUSING,
+	RESUMING,
+};
+
+enum msm_vfe_axi_cfg_update_state {
+	NO_AXI_CFG_UPDATE,
+	APPLYING_UPDATE_RESUME,
+	UPDATE_REQUESTED,
 };
 
 #define VFE_NO_DROP            0xFFFFFFFF
@@ -240,12 +278,10 @@ struct msm_vfe_axi_stream {
 	uint32_t session_id;
 	uint32_t stream_id;
 	uint32_t bufq_handle;
-	uint32_t bufq_scratch_handle;
 	uint32_t stream_handle;
-	uint32_t request_frm_num;
 	uint8_t buf_divert;
 	enum msm_vfe_axi_stream_type stream_type;
-
+	uint32_t vt_enable;
 	uint32_t frame_based;
 	uint32_t framedrop_period;
 	uint32_t framedrop_pattern;
@@ -253,6 +289,7 @@ struct msm_vfe_axi_stream {
 	uint32_t init_frame_drop;
 	uint32_t burst_frame_count;/*number of sof before burst stop*/
 	uint8_t framedrop_update;
+	spinlock_t lock;
 
 	/*Bandwidth calculation info*/
 	uint32_t max_width;
@@ -265,6 +302,7 @@ struct msm_vfe_axi_stream {
 	uint32_t runtime_burst_frame_count;/*number of sof before burst stop*/
 	uint32_t runtime_num_burst_capture;
 	uint8_t runtime_framedrop_update;
+	uint32_t runtime_output_format;
 };
 
 struct msm_vfe_axi_composite_info {
@@ -280,6 +318,7 @@ struct msm_vfe_src_info {
 	enum msm_vfe_inputmux input_mux;
 	uint32_t width;
 	long pixel_clock;
+	uint32_t input_format;/*V4L2 pix format with bayer pattern*/
 };
 
 enum msm_wm_ub_cfg_type {
@@ -300,6 +339,7 @@ struct msm_vfe_axi_shared_data {
 		composite_info[MAX_NUM_COMPOSITE_MASK];
 	uint8_t num_used_composite_mask;
 	uint32_t stream_update;
+	atomic_t axi_cfg_update;
 	enum msm_isp_camif_update_state pipeline_update;
 	struct msm_vfe_src_info src_info[VFE_SRC_MAX];
 	uint16_t stream_handle_cnt;
@@ -374,10 +414,12 @@ struct vfe_device {
 	struct resource *vfe_irq;
 	struct resource *vfe_mem;
 	struct resource *vfe_vbif_mem;
+	struct resource *tcsr_mem;
 	struct resource *vfe_io;
 	struct resource *vfe_vbif_io;
 	void __iomem *vfe_base;
 	void __iomem *vfe_vbif_base;
+	void __iomem *tcsr_base;
 
 	struct device *iommu_ctx[MAX_IOMMU_CTX];
 
@@ -402,6 +444,7 @@ struct vfe_device {
 	struct msm_vfe_tasklet_queue_cmd
 		tasklet_queue_cmd[MSM_VFE_TASKLETQ_SIZE];
 
+	uint32_t soc_hw_version;
 	uint32_t vfe_hw_version;
 	struct msm_vfe_hardware_info *hw_info;
 	struct msm_vfe_axi_shared_data axi_data;
@@ -411,6 +454,11 @@ struct vfe_device {
 	int dump_reg;
 	int vfe_clk_idx;
 	uint32_t vfe_open_cnt;
+	uint8_t vt_enable;
+	void __iomem *p_avtimer_msw;
+	void __iomem *p_avtimer_lsw;
+	uint8_t ignore_error;
 };
+void msm_frame_monitoring(struct work_struct *work);
 
 #endif

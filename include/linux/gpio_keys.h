@@ -1,5 +1,12 @@
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
+ */
+
 #ifndef _GPIO_KEYS_H
 #define _GPIO_KEYS_H
+
+#define ACTIVE_STATE_CNT 1
 
 struct device;
 
@@ -14,6 +21,7 @@ struct gpio_keys_button {
 	int debounce_interval;	/* debounce ticks interval in msecs */
 	bool can_disable;
 	int value;		/* axis value for EV_ABS */
+	unsigned int active_cnt:ACTIVE_STATE_CNT;
 	unsigned int irq;	/* Irq number in case of interrupt keys */
 };
 

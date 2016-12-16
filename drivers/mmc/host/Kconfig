@@ -317,6 +317,14 @@ config MMC_IMX
 
 	  If unsure, say N.
 
+config MMC_MSM
+	tristate "Qualcomm SDCC Controller Support"
+	depends on MMC && ARCH_MSM
+	help
+	  This provides support for the SD/MMC cell found in the
+	  MSM and QSD SOCs from Qualcomm. The controller also has
+	  support for SDIO devices.
+
 config MMC_MXC
 	tristate "Freescale i.MX21/27/31 Multimedia Card Interface support"
 	depends on ARCH_MXC
@@ -463,22 +471,12 @@ config MMC_SDHCI_MSM
 
 	  If unsure, say N.
 
-config MMC_SDHCI_MSM_DISABLE_HPI
-	bool "Qualcomm SDHCI Controller Disable HPI"
-	depends on MMC_SDHCI_MSM
-	help
-	  This disables HPI mode to avoid a timeout due to card specific
-	  issues.
-
-	  If unsure, say N.
-
 config MMC_MSM
 	tristate "Qualcomm SDCC Controller Support"
 	depends on MMC && ARCH_MSM
 	help
 	  This provides support for the SD/MMC cell found in the
-	  MSM and QSD SOCs from Qualcomm. The controller also has
-	  support for SDIO devices.
+          MSM and QSD SOCs from Qualcomm.
 
 config MMC_MSM_SDC1_SUPPORT
 	boolean "Qualcomm SDC1 support"

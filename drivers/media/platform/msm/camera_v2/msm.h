@@ -9,15 +9,19 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
+ */
 
 #ifndef _MSM_H
 #define _MSM_H
 
 #include <linux/version.h>
+#include <linux/completion.h>
 #include <linux/i2c.h>
 #include <linux/videodev2.h>
 #include <linux/pm_qos.h>
-#include <linux/wakelock.h>
 #include <linux/msm_ion.h>
 #include <linux/iommu.h>
 #include <media/v4l2-dev.h>
@@ -36,6 +40,7 @@
 struct msm_video_device {
 	struct video_device *vdev;
 	atomic_t opened;
+	atomic_t stream_cnt;
 };
 
 struct msm_queue_head {
@@ -70,7 +75,7 @@ struct msm_command {
 struct msm_command_ack {
 	struct list_head list;
 	struct msm_queue_head command_q;
-	wait_queue_head_t wait;
+	struct completion wait_complete;
 	int stream_id;
 };
 
@@ -116,4 +121,5 @@ struct vb2_queue *msm_get_stream_vb2q(unsigned int session_id,
 	unsigned int stream_id);
 struct msm_stream *msm_get_stream_from_vb2q(struct vb2_queue *q);
 struct msm_session *msm_session_find(unsigned int session_id);
+void msm_error_notify(unsigned int session_id, unsigned int error_type);
 #endif /*_MSM_H */

@@ -27,7 +27,6 @@ obj-$(CONFIG_SGI_GRU)		+= sgi-gru/
 obj-$(CONFIG_CS5535_MFGPT)	+= cs5535-mfgpt.o
 obj-$(CONFIG_HP_ILO)		+= hpilo.o
 obj-$(CONFIG_APDS9802ALS)	+= apds9802als.o
-obj-$(CONFIG_APDS9930)		+= apds993x.o
 obj-$(CONFIG_ISL29003)		+= isl29003.o
 obj-$(CONFIG_ISL29020)		+= isl29020.o
 obj-$(CONFIG_USB_HSIC_SMSC_HUB) += smsc_hub.o
@@ -62,7 +61,6 @@ obj-$(CONFIG_CI_BRIDGE_SPI) += ci-bridge-spi.o
 obj-$(CONFIG_HAPTIC_ISA1200)		+= isa1200.o
 obj-$(CONFIG_PMIC8058_PWM) += pmic8058-pwm.o
 obj-$(CONFIG_PMIC8XXX_VIBRATOR) += pm8xxx-vibrator.o
-obj-$(CONFIG_MSM8974_PWM_VIBRATOR) += msm8974_pwm_vibrator.o
 obj-$(CONFIG_PMIC8XXX_NFC) += pm8xxx-nfc.o
 obj-$(CONFIG_PMIC8XXX_UPL) += pm8xxx-upl.o
 obj-$(CONFIG_MSM_MEMORY_LOW_POWER_MODE_SUSPEND_DEEP_POWER_DOWN) \
@@ -72,5 +70,6 @@ obj-$(CONFIG_QSEECOM) += qseecom.o
 obj-$(CONFIG_QFP_FUSE) += qfp_fuse.o
 obj-$(CONFIG_TI_DRV2667) += ti_drv2667.o
 obj-$(CONFIG_QPNP_MISC) += qpnp-misc.o
-obj-$(CONFIG_EARJACK_DEBUGGER) += earjack_debugger.o
-obj-$(CONFIG_FAN48632_BOOST) += fan48632_boost.o
+
+CFLAGS_drv2604-vibrator.o += -Idrivers/staging/android
+obj-y				+= drv2604-vibrator.o

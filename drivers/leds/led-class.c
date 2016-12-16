@@ -1,4 +1,9 @@
 /*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
+ */
+
+/*
  * LED Class Core
  *
  * Copyright (C) 2005 John Lenz <lenz@cs.wisc.edu>
@@ -92,13 +97,72 @@ static ssize_t led_max_brightness_show(struct device *dev,
 	return snprintf(buf, LED_BUFF_SIZE, "%u\n", led_cdev->max_brightness);
 }
 
+static ssize_t led_control_ex_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, LED_BUFF_SIZE, "control_ex: invalid access\n");
+}
+
+#define LED_PARAM_NUM	(LED_CTRL_MAX_SEQUENCE + 3)
+
+static ssize_t led_control_ex_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t size)
+{
+	struct led_classdev *led_cdev = dev_get_drvdata(dev);
+	ssize_t ret = -EINVAL;
+	char *after;
+	const char *start;
+	size_t count = 0;
+	unsigned long param[LED_PARAM_NUM];
+	int index;
+
+	after = (char *)buf;
+	memset(param, 0, sizeof(param));
+	for (index = 0; index < LED_PARAM_NUM; ++index)
+	{
+		/* skip non-numeric */
+		while (!isdigit(*after))
+		{
+			if ((count >= size) || (*after == '\0'))
+			{
+				index = LED_PARAM_NUM;
+				ret = count;
+				goto parse_param_exit;
+			}
+
+			++after;
+			++count;
+		}
+		start = after;
+
+		/* converted to numeric value from string */
+		param[index] = simple_strtoul(start, &after, 10);
+		count += after - start;
+	}
+
+parse_param_exit:
+	if (index >= LED_PARAM_NUM)
+	{
+		if (led_cdev->control_ex)
+		{
+			led_cdev->control_ex(led_cdev, param[0], param[1], param[2], &param[3]);
+		}
+	}
+
+	return ret;
+}
+
+
 static struct device_attribute led_class_attrs[] = {
 	__ATTR(brightness, 0644, led_brightness_show, led_brightness_store),
 	__ATTR(max_brightness, 0644, led_max_brightness_show,
 			led_max_brightness_store),
+#ifdef QUALCOMM_ORIGINAL_FEATURE
 #ifdef CONFIG_LEDS_TRIGGERS
 	__ATTR(trigger, 0644, led_trigger_show, led_trigger_store),
 #endif
+#endif
+	__ATTR(control_ex, 0644, led_control_ex_show, led_control_ex_store),
 	__ATTR_NULL,
 };
 

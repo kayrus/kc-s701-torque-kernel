@@ -5,6 +5,10 @@
  *
  * This file is released under the GPLv2.
  */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2013 KYOCERA Corporation
+ */
 
 #include <linux/device.h>
 #include <linux/slab.h>
@@ -649,31 +653,6 @@ void pm_wakeup_event(struct device *dev, unsigned int msec)
 }
 EXPORT_SYMBOL_GPL(pm_wakeup_event);
 
-static void print_active_wakeup_sources(void)
-{
-	struct wakeup_source *ws;
-	int active = 0;
-	struct wakeup_source *last_activity_ws = NULL;
-
-	rcu_read_lock();
-	list_for_each_entry_rcu(ws, &wakeup_sources, entry) {
-		if (ws->active) {
-			pr_info("active wakeup source: %s\n", ws->name);
-			active = 1;
-		} else if (!active &&
-			   (!last_activity_ws ||
-			    ktime_to_ns(ws->last_time) >
-			    ktime_to_ns(last_activity_ws->last_time))) {
-			last_activity_ws = ws;
-		}
-	}
-
-	if (!active && last_activity_ws)
-		pr_info("last active wakeup source: %s\n",
-			last_activity_ws->name);
-	rcu_read_unlock();
-}
-
 /**
  * pm_wakeup_pending - Check if power transition in progress should be aborted.
  *
@@ -696,10 +675,6 @@ bool pm_wakeup_pending(void)
 		events_check_enabled = !ret;
 	}
 	spin_unlock_irqrestore(&events_lock, flags);
-
-	if (ret)
-		print_active_wakeup_sources();
-
 	return ret;
 }
 
@@ -774,6 +749,7 @@ void pm_wakep_autosleep_enabled(bool set)
 	struct wakeup_source *ws;
 	ktime_t now = ktime_get();
 
+	pr_info("checkpoint: %s(%d)", __func__, set);
 	rcu_read_lock();
 	list_for_each_entry_rcu(ws, &wakeup_sources, entry) {
 		spin_lock_irq(&ws->lock);

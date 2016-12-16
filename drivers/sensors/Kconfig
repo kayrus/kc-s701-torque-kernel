@@ -1,0 +1,97 @@
+#
+# This software is contributed or developed by KYOCERA Corporation.
+# (C) 2014 KYOCERA Corporation
+#
+#
+# Copyright (c) 2010 Yamaha Corporation
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301,
+# USA.
+#
+config INPUT_YAS_ACCELEROMETER
+	tristate "YAS Acceleration Sensor"
+	depends on I2C
+	default y
+
+config INPUT_YAS_ACCELEROMETER_POSITION
+	int "YAS Acceleration Sensor Mounting Position on Board"
+	depends on INPUT_YAS_ACCELEROMETER
+	default "5"
+	help
+		Chip mounting position (pin 1).
+			0: top, upper-left
+			1: top, upper-right
+			2: top, lower-right
+			3: top, lower-left
+			4: bottom, upper-left
+			5: bottom, upper-right
+			6: bottom, lower-right
+			7: bottom, lower-left
+
+config INPUT_YAS_MAGNETOMETER
+	tristate "YAS Geomagnetic Sensor"
+	depends on I2C
+	default y
+
+
+config INPUT_YAS_MAGNETOMETER_POSITION
+		int "YAS Geomagnetic Sensor Mounting Position on Board"
+		depends on INPUT_YAS_MAGNETOMETER
+		default "7"
+		help
+			Chip mounting position (pin 1).
+				0: top, upper-left
+				1: top, upper-right
+				2: top, lower-right
+				3: top, lower-left
+				4: bottom, upper-left
+				5: bottom, upper-right
+				6: bottom, lower-right
+				7: bottom, lower-left
+
+config INPUT_YAS_ORIENTATION
+	tristate "YAS Orientation Sensor"
+	depends on I2C
+	default y
+
+config INPUT_YAS_PRESSURE
+	tristate "YAS Pressure Sensor"
+	depends on I2C
+	default y
+
+config INPUT_SENSOR_PROXIMITY
+	tristate "Proximity/Light Sensor Driver"
+	default y
+	help
+		Support Proximity/Light Sensor Driver.
+
+config INPUT_SENSOR_PRESSURE
+	tristate "Pressure Sensor Driver"
+	default y
+	help
+		Support Pressure Sensor Driver.
+
+config INPUT_YAS_FUSION_SENSOR
+	tristate "Virtual Fusion Sensor Driver"
+	default y
+	help
+		Support Virtual Fusion Sensor Driver.
+
+
+config SENSORS
+	bool "Sensors Class Support"
+	help
+	  This option enables the sensor sysfs class in /sys/class/sensors.
+	  You'll need this to do anything useful with sensorss. If unsure, say N.

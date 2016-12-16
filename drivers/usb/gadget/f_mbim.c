@@ -11,6 +11,12 @@
  *
  */
 
+/*
+* This software is contributed or developed by KYOCERA Corporation.
+* (C) 2013 KYOCERA Corporation
+* (C) 2014 KYOCERA Corporation
+*/
+
 #define pr_fmt(fmt) "%s: " fmt, __func__
 
 #include <linux/kernel.h>
@@ -74,7 +80,6 @@ struct f_mbim {
 	struct usb_composite_dev	*cdev;
 
 	atomic_t	online;
-	bool		is_open;
 
 	atomic_t	open_excl;
 	atomic_t	ioctl_excl;
@@ -171,7 +176,7 @@ static struct usb_cdc_ncm_ntb_parameters mbim_ntb_parameters = {
  */
 
 #define LOG2_STATUS_INTERVAL_MSEC	5	/* 1 << 5 == 32 msec */
-#define NCM_STATUS_BYTECOUNT		16	/* 8 byte header + data */
+#define MBIM_STATUS_BYTECOUNT		16	/* 8 byte header + data */
 
 static struct usb_interface_assoc_descriptor mbim_iad_desc = {
 	.bLength =		sizeof mbim_iad_desc,
@@ -274,7 +279,7 @@ static struct usb_endpoint_descriptor fs_mbim_notify_desc = {
 
 	.bEndpointAddress =	USB_DIR_IN,
 	.bmAttributes =		USB_ENDPOINT_XFER_INT,
-	.wMaxPacketSize =	4*cpu_to_le16(NCM_STATUS_BYTECOUNT),
+	.wMaxPacketSize =	4*cpu_to_le16(MBIM_STATUS_BYTECOUNT),
 	.bInterval =		1 << LOG2_STATUS_INTERVAL_MSEC,
 };
 
@@ -319,7 +324,7 @@ static struct usb_endpoint_descriptor hs_mbim_notify_desc = {
 
 	.bEndpointAddress =	USB_DIR_IN,
 	.bmAttributes =		USB_ENDPOINT_XFER_INT,
-	.wMaxPacketSize =	4*cpu_to_le16(NCM_STATUS_BYTECOUNT),
+	.wMaxPacketSize =	4*cpu_to_le16(MBIM_STATUS_BYTECOUNT),
 	.bInterval =		LOG2_STATUS_INTERVAL_MSEC + 4,
 };
 static struct usb_endpoint_descriptor hs_mbim_in_desc = {
@@ -747,11 +752,6 @@ static void mbim_reset_function_queue(struct f_mbim *dev)
 	pr_debug("Queue empty packet for QBI");
 
 	spin_lock(&dev->lock);
-	if (!dev->is_open) {
-		pr_err("%s: mbim file handler %p is not open", __func__, dev);
-		spin_unlock(&dev->lock);
-		return;
-	}
 
 	cpkt = mbim_alloc_ctrl_pkt(0, GFP_ATOMIC);
 	if (!cpkt) {
@@ -976,12 +976,6 @@ fmbim_cmd_complete(struct usb_ep *ep, struct usb_request *req)
 	memcpy(cpkt->buf, req->buf, len);
 
 	spin_lock(&dev->lock);
-	if (!dev->is_open) {
-		pr_err("mbim file handler %p is not open", dev);
-		spin_unlock(&dev->lock);
-		mbim_free_ctrl_pkt(cpkt);
-		return;
-	}
 
 	list_add_tail(&cpkt->list, &dev->cpkt_req_q);
 	spin_unlock(&dev->lock);
@@ -1455,6 +1449,7 @@ mbim_bind(struct usb_configuration *c, struct usb_function *f)
 	mbim_union_desc.bSlaveInterface0 = status;
 
 	mbim->bam_port.cdev = cdev;
+	mbim->bam_port.func = &mbim->function;
 
 	status = -ENODEV;
 
@@ -1489,7 +1484,7 @@ mbim_bind(struct usb_configuration *c, struct usb_function *f)
 	status = -ENOMEM;
 
 	/* allocate notification request and buffer */
-	mbim->not_port.notify_req = mbim_alloc_req(ep, NCM_STATUS_BYTECOUNT);
+	mbim->not_port.notify_req = mbim_alloc_req(ep, MBIM_STATUS_BYTECOUNT);
 	if (!mbim->not_port.notify_req) {
 		pr_info("failed to allocate notify request\n");
 		goto fail;
@@ -1574,6 +1569,7 @@ static void mbim_unbind(struct usb_configuration *c, struct usb_function *f)
 {
 	struct f_mbim	*mbim = func_to_mbim(f);
 
+	bam_data_destroy(mbim->port_num);
 	if (gadget_is_dualspeed(c->cdev->gadget))
 		usb_free_descriptors(f->hs_descriptors);
 	usb_free_descriptors(f->descriptors);
@@ -1844,10 +1840,6 @@ static int mbim_open(struct inode *ip, struct file *fp)
 
 	atomic_set(&_mbim_dev->error, 0);
 
-	spin_lock(&_mbim_dev->lock);
-	_mbim_dev->is_open = true;
-	spin_unlock(&_mbim_dev->lock);
-
 	pr_info("Exit, mbim file opened\n");
 
 	return 0;
@@ -1855,13 +1847,7 @@ static int mbim_open(struct inode *ip, struct file *fp)
 
 static int mbim_release(struct inode *ip, struct file *fp)
 {
-	struct f_mbim *mbim = fp->private_data;
-
 	pr_info("Close mbim file");
-
-	spin_lock(&mbim->lock);
-	mbim->is_open = false;
-	spin_unlock(&mbim->lock);
 
 	mbim_unlock(&_mbim_dev->open_excl);
 

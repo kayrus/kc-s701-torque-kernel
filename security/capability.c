@@ -1,6 +1,9 @@
 /*
  *  Capabilities Linux Security Module
  *
+ *  This software is contributed or developed by KYOCERA Corporation.
+ *  (C) 2014 KYOCERA Corporation
+ *
  *  This is the default security module in case no other module is loaded.
  *
  *	This program is free software; you can redistribute it and/or modify
@@ -411,6 +414,11 @@ static int cap_kernel_create_files_as(struct cred *new, struct inode *inode)
 }
 
 static int cap_kernel_module_request(char *kmod_name)
+{
+	return 0;
+}
+
+static int cap_kernel_setup_load_info(char *kmod_name)
 {
 	return 0;
 }
@@ -990,6 +998,7 @@ void __init security_fixup_ops(struct security_operations *ops)
 	set_to_cap_if_null(ops, kernel_act_as);
 	set_to_cap_if_null(ops, kernel_create_files_as);
 	set_to_cap_if_null(ops, kernel_module_request);
+	set_to_cap_if_null(ops, kernel_setup_load_info);
 	set_to_cap_if_null(ops, task_fix_setuid);
 	set_to_cap_if_null(ops, task_setpgid);
 	set_to_cap_if_null(ops, task_getpgid);

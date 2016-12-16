@@ -25,7 +25,6 @@
 #include <linux/mutex.h>
 #include <linux/freezer.h>
 #include <linux/usb/otg.h>
-#include <linux/random.h>
 
 #include <asm/uaccess.h>
 #include <asm/byteorder.h>
@@ -2039,14 +2038,6 @@ int usb_new_device(struct usb_device *udev)
 	/* Tell the world! */
 	announce_device(udev);
 
-	if (udev->serial)
-		add_device_randomness(udev->serial, strlen(udev->serial));
-	if (udev->product)
-		add_device_randomness(udev->product, strlen(udev->product));
-	if (udev->manufacturer)
-		add_device_randomness(udev->manufacturer,
-				      strlen(udev->manufacturer));
-
 	device_enable_async_suspend(&udev->dev);
 
 	/*
@@ -3168,7 +3159,8 @@ hub_port_init (struct usb_hub *hub, struct usb_device *udev, int port1,
 	for (i = 0; i < GET_DESCRIPTOR_TRIES; (++i, msleep(100))) {
 		if (USE_NEW_SCHEME(retry_counter) &&
 			!(hcd->driver->flags & HCD_USB3) &&
-			!(hcd->driver->flags & HCD_OLD_ENUM)) {
+			!((hcd->driver->flags & HCD_RT_OLD_ENUM) &&
+				!hdev->parent)) {
 			struct usb_device_descriptor *buf;
 			int r = 0;
 
@@ -3270,7 +3262,8 @@ hub_port_init (struct usb_hub *hub, struct usb_device *udev, int port1,
 			msleep(10);
 			if (USE_NEW_SCHEME(retry_counter) &&
 				!(hcd->driver->flags & HCD_USB3) &&
-				!(hcd->driver->flags & HCD_OLD_ENUM))
+				!((hcd->driver->flags & HCD_RT_OLD_ENUM) &&
+					!hdev->parent))
 				break;
   		}
 

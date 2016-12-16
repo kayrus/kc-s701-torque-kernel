@@ -1,3 +1,8 @@
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
+ */
+
 #ifndef _LINUX_FB_H
 #define _LINUX_FB_H
 
@@ -39,6 +44,10 @@
 #define FBIOPUT_MODEINFO        0x4617
 #define FBIOGET_DISPINFO        0x4618
 #define FBIO_WAITFORVSYNC	_IOW('F', 0x20, __u32)
+
+#define FBIOPUT_DIAGVALID    0x4621
+#define FBIOPUT_DIAGINVALID  0x4622
+#define FBIOGET_CAMERAONOFF  0x4623
 
 #define FB_TYPE_PACKED_PIXELS		0	/* Packed Pixels	*/
 #define FB_TYPE_PLANES			1	/* Non interleaved planes */

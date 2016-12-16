@@ -9,6 +9,10 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2015 KYOCERA Corporation
+*/
 
 /*
  * Description: MIPS USB IP core family device controller
@@ -70,10 +74,6 @@
 #include <mach/usb_trace.h>
 #include "ci13xxx_udc.h"
 
-/* Turns on streaming. overrides CI13XXX_DISABLE_STREAMING */
-static unsigned int streaming;
-module_param(streaming, uint, S_IRUGO | S_IWUSR);
-
 /******************************************************************************
  * DEFINE
  *****************************************************************************/
@@ -82,6 +82,15 @@ module_param(streaming, uint, S_IRUGO | S_IWUSR);
 #define USB_MAX_TIMEOUT		25 /* 25msec timeout */
 #define EP_PRIME_CHECK_DELAY	(jiffies + msecs_to_jiffies(1000))
 #define MAX_PRIME_CHECK_RETRY	3 /*Wait for 3sec for EP prime failure */
+
+#define kc_dbg(instance, format, arg...)			\
+	if (ci13xxx_debug_log)							\
+		dev_info(instance , format , ## arg)
+
+/* Enable Proprietary charger detection */
+bool ci13xxx_debug_log = false;
+module_param(ci13xxx_debug_log, bool, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(ci13xxx_debug_log, "Enable KC Log Output");
 
 /* ctrl register bank access */
 static DEFINE_SPINLOCK(udc_lock);
@@ -367,7 +376,10 @@ static int hw_device_reset(struct ci13xxx *udc)
 	 * 8 micro frames. If CPU can handle interrupts at faster rate, ITC
 	 * can be set to lesser value to gain performance.
 	 */
-	if (udc->udc_driver->flags & CI13XXX_ZERO_ITC)
+	if (udc->udc_driver->nz_itc)
+		hw_cwrite(CAP_USBCMD, USBCMD_ITC_MASK,
+			USBCMD_ITC(udc->udc_driver->nz_itc));
+	else if (udc->udc_driver->flags & CI13XXX_ZERO_ITC)
 		hw_cwrite(CAP_USBCMD, USBCMD_ITC_MASK, USBCMD_ITC(0));
 
 	if (hw_cread(CAP_USBMODE, USBMODE_CM) != USBMODE_CM_DEVICE) {
@@ -389,19 +401,31 @@ static int hw_device_reset(struct ci13xxx *udc)
 static int hw_device_state(u32 dma)
 {
 	struct ci13xxx *udc = _udc;
+	struct usb_gadget *gadget = &udc->gadget;
 
 	if (dma) {
-		if (streaming || !(udc->udc_driver->flags &
-				CI13XXX_DISABLE_STREAMING))
+		if (gadget->streaming_enabled || !(udc->udc_driver->flags &
+				CI13XXX_DISABLE_STREAMING)) {
 			hw_cwrite(CAP_USBMODE, USBMODE_SDIS, 0);
-		else
+			pr_debug("%s(): streaming mode is enabled. USBMODE:%x\n",
+				__func__, hw_cread(CAP_USBMODE, ~0));
+		} else {
 			hw_cwrite(CAP_USBMODE, USBMODE_SDIS, USBMODE_SDIS);
-
+			pr_debug("%s(): streaming mode is disabled. USBMODE:%x\n",
+				__func__, hw_cread(CAP_USBMODE, ~0));
+		}
 		hw_cwrite(CAP_ENDPTLISTADDR, ~0, dma);
 
 		if (udc->udc_driver->notify_event)
 			udc->udc_driver->notify_event(udc,
 				CI13XXX_CONTROLLER_CONNECT_EVENT);
+
+		/* Set BIT(31) to enable AHB2AHB Bypass functionality */
+		if (udc->udc_driver->flags & CI13XXX_ENABLE_AHB2AHB_BYPASS) {
+			hw_awrite(ABS_AHBMODE, AHB2AHB_BYPASS, AHB2AHB_BYPASS);
+			pr_debug("%s(): ByPass Mode is enabled. AHBMODE:%x\n",
+					__func__, hw_aread(ABS_AHBMODE, ~0));
+		}
 
 		/* interrupt, error, port change, reset, sleep/suspend */
 		hw_cwrite(CAP_USBINTR, ~0,
@@ -410,6 +434,12 @@ static int hw_device_state(u32 dma)
 	} else {
 		hw_cwrite(CAP_USBCMD, USBCMD_RS, 0);
 		hw_cwrite(CAP_USBINTR, ~0, 0);
+		/* Clear BIT(31) to disable AHB2AHB Bypass functionality */
+		if (udc->udc_driver->flags & CI13XXX_ENABLE_AHB2AHB_BYPASS) {
+			hw_awrite(ABS_AHBMODE, AHB2AHB_BYPASS, 0);
+			pr_debug("%s(): ByPass Mode is disabled. AHBMODE:%x\n",
+					__func__, hw_aread(ABS_AHBMODE, ~0));
+		}
 	}
 	return 0;
 }
@@ -3381,6 +3411,9 @@ static int ci13xxx_pullup(struct usb_gadget *_gadget, int is_active)
 	else
 		hw_device_state(0);
 
+	kc_dbg(&udc->gadget.dev, "= USB DET I = : %s D+ Pull %s\n",
+		__func__, is_active ? "Up" : "Down");
+
 	return 0;
 }
 
@@ -3663,20 +3696,25 @@ static irqreturn_t udc_irq(void)
 
 		/* order defines priority - do NOT change it */
 		if (USBi_URI & intr) {
+			kc_dbg(&udc->gadget.dev, "= USB INT I = : %s USB RESET RECEIVED\n", __func__);
 			isr_statistics.uri++;
 			isr_reset_handler(udc);
 		}
 		if (USBi_PCI & intr) {
+			kc_dbg(&udc->gadget.dev, "= USB INT I = : %s USB RESUME\n", __func__);
 			isr_statistics.pci++;
 			isr_resume_handler(udc);
 		}
-		if (USBi_UEI & intr)
+		if (USBi_UEI & intr) {
+			kc_dbg(&udc->gadget.dev, "= USB INT I = : %s USB ERROR INTERRUPT\n", __func__);
 			isr_statistics.uei++;
+		}
 		if (USBi_UI  & intr) {
 			isr_statistics.ui++;
 			isr_tr_complete_handler(udc);
 		}
 		if (USBi_SLI & intr) {
+			kc_dbg(&udc->gadget.dev, "= USB INT I = : %s USB SUSPEND\n", __func__);
 			isr_suspend_handler(udc);
 			isr_statistics.sli++;
 		}

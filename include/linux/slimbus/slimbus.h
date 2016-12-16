@@ -1,3 +1,8 @@
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2013 KYOCERA Corporation
+ * (C) 2014 KYOCERA Corporation
+ */
 /* Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -511,8 +516,11 @@ enum slim_clk_state {
  * @wakeup: This function pointer implements controller-specific procedure
  *	to wake it up from clock-pause. Framework will call this to bring
  *	the controller out of clock pause.
- * @config_port: Configure a port and make it ready for data transfer. This is
- *	called by framework after connect_port message is sent successfully.
+ * @alloc_port: Allocate a port and make it ready for data transfer. This is
+ *	called by framework to make sure controller can take necessary steps
+ *	to initialize its port
+ * @dealloc_port: Counter-part of alloc_port. This is called by framework so
+ *	that controller can free resources associated with this port
  * @framer_handover: If this controller has multiple framers, this API will
  *	be called to switch between framers if controller desires to change
  *	the active framer.
@@ -557,7 +565,9 @@ struct slim_controller {
 	int			(*get_laddr)(struct slim_controller *ctrl,
 				const u8 *ea, u8 elen, u8 *laddr);
 	int			(*wakeup)(struct slim_controller *ctrl);
-	int			(*config_port)(struct slim_controller *ctrl,
+	int			(*alloc_port)(struct slim_controller *ctrl,
+				u8 port);
+	void			(*dealloc_port)(struct slim_controller *ctrl,
 				u8 port);
 	int			(*framer_handover)(struct slim_controller *ctrl,
 				struct slim_framer *new_framer);
@@ -576,6 +586,14 @@ struct slim_controller {
  * @shutdown: Standard shutdown callback used during powerdown/halt.
  * @suspend: Standard suspend callback used during system suspend
  * @resume: Standard resume callback used during system resume
+ * @device_up: This callback is called when the device reports present and
+ *		gets a logical address assigned to it
+ * @device_down: This callback is called when device reports absent, or the
+ *		bus goes down. Device will report present when bus is up and
+ *		device_up callback will be called again when that happens
+ * @reset_device: This callback is called after framer is booted.
+ *		Driver should do the needful to reset the device,
+ *		so that device acquires sync and be operational.
  * @driver: Slimbus device drivers should initialize name and owner field of
  *	this structure
  * @id_table: List of slimbus devices supported by this driver
@@ -588,6 +606,10 @@ struct slim_driver {
 					pm_message_t pmesg);
 	int				(*resume)(struct slim_device *sldev);
 	int				(*device_up)(struct slim_device *sldev);
+	int				(*device_down)
+						(struct slim_device *sldev);
+	int				(*reset_device)
+						(struct slim_device *sldev);
 
 	struct device_driver		driver;
 	const struct slim_device_id	*id_table;
@@ -617,6 +639,10 @@ struct slim_pending_ch {
  *  @driver: Device's driver. Pointer to access routines.
  *  @ctrl: Slimbus controller managing the bus hosting this device.
  *  @laddr: 1-byte Logical address of this device.
+ *  @reported: Flag to indicate whether this device reported present. The flag
+ *	is set when device reports present, and is reset when it reports
+ *	absent. This flag alongwith notified flag below is used to call
+ *	device_up, or device_down callbacks for driver of this device.
  *  @mark_define: List of channels pending definition/activation.
  *  @mark_suspend: List of channels pending suspend.
  *  @mark_removal: List of channels pending removal.
@@ -640,6 +666,7 @@ struct slim_device {
 	struct slim_driver	*driver;
 	struct slim_controller	*ctrl;
 	u8			laddr;
+	bool			reported;
 	struct list_head	mark_define;
 	struct list_head	mark_suspend;
 	struct list_head	mark_removal;
@@ -795,6 +822,8 @@ extern enum slim_port_err slim_port_get_xfer_status(struct slim_device *sb,
  * Channel specified in chanh needs to be allocated first.
  * Returns -EALREADY if source is already configured for this channel.
  * Returns -ENOTCONN if channel is not allocated
+ * Returns -EINVAL if invalid direction is specified for non-manager port,
+ * or if the manager side port number is out of bounds, or in incorrect state
  */
 extern int slim_connect_src(struct slim_device *sb, u32 srch, u16 chanh);
 
@@ -808,6 +837,9 @@ extern int slim_connect_src(struct slim_device *sb, u32 srch, u16 chanh);
  * Channel specified in chanh needs to be allocated first.
  * Returns -EALREADY if sink is already configured for this channel.
  * Returns -ENOTCONN if channel is not allocated
+ * Returns -EINVAL if invalid parameters are passed, or invalid direction is
+ * specified for non-manager port, or if the manager side port number is out of
+ * bounds, or in incorrect state
  */
 extern int slim_connect_sink(struct slim_device *sb, u32 *sinkh, int nsink,
 				u16 chanh);
@@ -1012,6 +1044,23 @@ extern int slim_assign_laddr(struct slim_controller *ctrl, const u8 *e_addr,
 				u8 e_len, u8 *laddr, bool valid);
 
 /*
+ * slim_report_absent: Controller calls this function when a device
+ *	reports absent, OR when the device cannot be communicated with
+ * @sbdev: Device that cannot be reached, or that sent report absent
+ */
+void slim_report_absent(struct slim_device *sbdev);
+
+/*
+ * slim_framer_booted: This function is called by controller after the active
+ * framer has booted (using Bus Reset sequence, or after it has shutdown and has
+ * come back up). Components, devices on the bus may be in undefined state,
+ * and this function triggers their drivers to do the needful
+ * to bring them back in Reset state so that they can acquire sync, report
+ * present and be operational again.
+ */
+void slim_framer_booted(struct slim_controller *ctrl);
+
+/*
  * slim_msg_response: Deliver Message response received from a device to the
  *	framework.
  * @ctrl: Controller handle
@@ -1053,7 +1102,7 @@ extern void slim_ctrl_add_boarddevs(struct slim_controller *ctrl);
 extern int slim_register_board_info(struct slim_boardinfo const *info,
 					unsigned n);
 #else
-int slim_register_board_info(struct slim_boardinfo const *info,
+static inline int slim_register_board_info(struct slim_boardinfo const *info,
 					unsigned n)
 {
 	return 0;
@@ -1079,4 +1128,7 @@ static inline void slim_set_clientdata(struct slim_device *dev, void *data)
 {
 	dev_set_drvdata(&dev->dev, data);
 }
+#ifdef CONFIG_KYOCERA_MSND_HS_GPIO
+extern unsigned int msm_get_state(struct slim_controller *ctrl);
+#endif
 #endif /* _LINUX_SLIMBUS_H */

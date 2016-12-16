@@ -314,16 +314,6 @@ config APDS9802ALS
 	  This driver can also be built as a module.  If so, the module
 	  will be called apds9802als.
 
-config APDS9930
-	tristate "Avago APDS9930 combined als and proximity sensors"
-	depends on I2C
-	help
-	  Say Y here if you want to build a driver for Avago APDS9930
-	  combined ambient light and proximity sensor chip.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called apds9950. If unsure, say N here.
-
 config ISL29003
 	tristate "Intersil ISL29003 ambient light sensor"
 	depends on I2C && SYSFS
@@ -605,13 +595,6 @@ config PMIC8XXX_VIBRATOR
 	  on the PM8XXX chips. The vibrator is controlled using the
 	  timed output class.
 
-config MSM8974_PWM_VIBRATOR
-    bool "MSM8974 vibrator support"
-        depends on ANDROID_TIMED_OUTPUT
-        help
-          This option enables device driver support for MSM8974 Vibrator driver.
-          Some functions should be given by platform data for enable PWM, Motor IC, etc.
-
 config PMIC8XXX_NFC
 	tristate "Qualcomm PM8XXX support for Near Field Communication"
 	depends on MFD_PM8XXX
@@ -681,24 +664,6 @@ config TI_DRV2667
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called ti_drv2667.
-
-config EARJACK_DEBUGGER
-	bool "Earjack UART debugger support"
-	depends on SERIAL_MSM_HSL
-	help
-	  Enables support for Earjack Debugger trigger. It controls
-	  uart console. uart console will be disabled if detected earjack
-	  debugger. Otherwise, uart console will be enabled.
-
-	  Say 'y' here to include support for earjack debugger trigger
-
-config FAN48632_BOOST
-	tristate "FAN48632 Boost IC driver"
-	default n
-	help
-	  The FAN48632 is a boost regulator desinged to provide a minimum
-	  output voltage from a single cell Li-Ion battery, even when the
-	  battery voltage is below system cutoff.
 
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"

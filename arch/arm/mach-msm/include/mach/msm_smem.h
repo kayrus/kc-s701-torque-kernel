@@ -9,6 +9,10 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2014 KYOCERA Corporation
+ */
 
 #ifndef _ARCH_ARM_MACH_MSM_SMEM_H_
 #define _ARCH_ARM_MACH_MSM_SMEM_H_
@@ -26,8 +30,19 @@ enum {
 	NUM_SMEM_SUBSYSTEMS,
 };
 
+/*
+ * Flag options for the XXX_to_proc() API
+ *
+ * SMEM_ITEM_CACHED_FLAG - Indicates this operation should use cachable smem
+ *
+ * SMEM_ANY_HOST_FLAG - Indicates this operation should not apply to smem items
+ *                      which are limited to a specific host pairing.  Will
+ *                      cause this operation to ignore the to_proc parameter.
+ */
+#define SMEM_ITEM_CACHED_FLAG 1
+#define SMEM_ANY_HOST_FLAG 2
+
 #define SMEM_NUM_SMD_STREAM_CHANNELS        64
-#define SMEM_NUM_SMD_BLOCK_CHANNELS         64
 
 enum {
 	/* fixed items */
@@ -87,13 +102,13 @@ enum {
 	SMEM_ID_VENDOR1,
 	SMEM_ID_VENDOR2,
 	SMEM_HW_SW_BUILD_ID,
-	SMEM_SMD_BLOCK_PORT_BASE_ID,
-	SMEM_SMD_BLOCK_PORT_PROC0_HEAP = SMEM_SMD_BLOCK_PORT_BASE_ID +
-						SMEM_NUM_SMD_BLOCK_CHANNELS,
-	SMEM_SMD_BLOCK_PORT_PROC1_HEAP = SMEM_SMD_BLOCK_PORT_PROC0_HEAP +
-						SMEM_NUM_SMD_BLOCK_CHANNELS,
-	SMEM_I2C_MUTEX = SMEM_SMD_BLOCK_PORT_PROC1_HEAP +
-						SMEM_NUM_SMD_BLOCK_CHANNELS,
+	SMEM_SMD_BASE_ID_2,
+	SMEM_SMD_FIFO_BASE_ID_2 = SMEM_SMD_BASE_ID_2 +
+						SMEM_NUM_SMD_STREAM_CHANNELS,
+	SMEM_CHANNEL_ALLOC_TBL_2 = SMEM_SMD_FIFO_BASE_ID_2 +
+						SMEM_NUM_SMD_STREAM_CHANNELS,
+	SMEM_I2C_MUTEX = SMEM_CHANNEL_ALLOC_TBL_2 +
+						SMEM_NUM_SMD_STREAM_CHANNELS,
 	SMEM_SCLK_CONVERSION,
 	SMEM_SMD_SMSM_INTR_MUX,
 	SMEM_SMSM_CPU_INTR_MASK,
@@ -136,7 +151,29 @@ enum {
 	SMEM_BAM_PIPE_MEMORY,     /* 468 */
 	SMEM_IMAGE_VERSION_TABLE, /* 469 */
 	SMEM_LC_DEBUGGER, /* 470 */
+	SMEM_FLASH_NAND_DEV_INFO, /* 471 */
 	SMEM_NUM_ITEMS,
+
+	SMEM_KCC_BASE         = 500,
+	SMEM_KERR_LOG         = SMEM_KCC_BASE + 1,
+	SMEM_SBL_BOOTVER      = SMEM_KCC_BASE + 2,
+	SMEM_SBL_DNAND_DATA   = SMEM_KCC_BASE + 3,
+	SMEM_DDR_DATA_INFO    = SMEM_KCC_BASE + 4,
+	SMEM_KC_WM_UUID       = SMEM_KCC_BASE + 5,
+	SMEM_FACTORY_CMDLINE  = SMEM_KCC_BASE + 6,
+	SMEM_FACTORY_USB      = SMEM_KCC_BASE + 7,
+	SMEM_CRASH_LOG        = SMEM_KCC_BASE + 8,
+	SMEM_FACTORY_OPTIONS  = SMEM_KCC_BASE + 9,
+	SMEM_CHG_PARAM        = SMEM_KCC_BASE + 10,
+	SMEM_UICC_INFO        = SMEM_KCC_BASE + 11,
+	SMEM_LINUXSDDL_FLAG   = SMEM_KCC_BASE + 12,
+	SMEM_SECUREBOOT_FLAG  = SMEM_KCC_BASE + 13,
+	SMEM_HW_ID            = SMEM_KCC_BASE + 14,
+	SMEM_VENDOR_ID        = SMEM_KCC_BASE + 15,
+	SMEM_BFSS_DATA        = SMEM_KCC_BASE + 16,
+	SMEM_KC_POWER_ON_STATUS_INFO = SMEM_KCC_BASE + 17,
+	SMEM_BOOT_PW_ON_CHECK        = SMEM_KCC_BASE + 18,
+	SMEM_CHG_CYCLE               = SMEM_KCC_BASE + 19,
 };
 
 #ifdef CONFIG_MSM_SMD
@@ -144,6 +181,18 @@ void *smem_alloc(unsigned id, unsigned size);
 void *smem_alloc2(unsigned id, unsigned size_in);
 void *smem_get_entry(unsigned id, unsigned *size);
 void *smem_find(unsigned id, unsigned size);
+void *kc_smem_alloc(unsigned id, unsigned buf_size);
+
+int smsm_check_for_modem_crash(void);
+
+void *smem_alloc2_to_proc(unsigned id, unsigned size_in, unsigned to_proc,
+								unsigned flags);
+void *smem_alloc_to_proc(unsigned id, unsigned size, unsigned to_proc,
+								unsigned flags);
+void *smem_find_to_proc(unsigned id, unsigned size_in, unsigned to_proc,
+								unsigned flags);
+void *smem_get_entry_to_proc(unsigned id, unsigned *size, unsigned to_proc,
+								unsigned flags);
 
 /**
  * smem_get_entry_no_rlock - Get existing item without using remote spinlock
@@ -169,6 +218,13 @@ void *smem_get_entry_no_rlock(unsigned id, unsigned *size_out);
  */
 phys_addr_t smem_virt_to_phys(void *smem_address);
 
+/**
+ * SMEM initialization function that registers for a SMEM platform driver.
+ *
+ * @returns: success on successful driver registration.
+ */
+int __init msm_smem_init(void);
+
 #else
 static inline void *smem_alloc(unsigned id, unsigned size)
 {
@@ -186,6 +242,30 @@ static inline void *smem_find(unsigned id, unsigned size)
 {
 	return NULL;
 }
+void *smem_alloc2_to_proc(unsigned id, unsigned size_in, unsigned to_proc,
+								unsigned flags)
+{
+	return NULL;
+}
+static void *smem_alloc_to_proc(unsigned id, unsigned size, unsigned to_proc,
+								unsigned flags)
+{
+	return NULL;
+}
+static void *smem_find_to_proc(unsigned id, unsigned size_in, unsigned to_proc,
+								unsigned flags)
+{
+	return NULL;
+}
+static void *smem_get_entry_to_proc(unsigned id, unsigned *size,
+					unsigned to_proc, unsigned flags)
+{
+	return NULL;
+}
+static incline void *kc_smem_alloc(unsigned id, unsigned buf_size)
+{
+	return NULL;
+}
 void *smem_get_entry_no_rlock(unsigned id, unsigned *size_out)
 {
 	return NULL;
@@ -193,6 +273,10 @@ void *smem_get_entry_no_rlock(unsigned id, unsigned *size_out)
 static inline phys_addr_t smem_virt_to_phys(void *smem_address)
 {
 	return (phys_addr_t) NULL;
+}
+static int __init msm_smem_init(void)
+{
+	return 0;
 }
 #endif /* CONFIG_MSM_SMD  */
 #endif /* _ARCH_ARM_MACH_MSM_SMEM_H_ */

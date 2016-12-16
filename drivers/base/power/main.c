@@ -16,6 +16,10 @@
  * domain dependencies may differ from the ancestral dependencies that the
  * subsystem list maintains.
  */
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2013 KYOCERA Corporation
+ */
 
 #include <linux/device.h>
 #include <linux/kallsyms.h>
@@ -696,6 +700,7 @@ void dpm_resume(pm_message_t state)
 	struct device *dev;
 	ktime_t starttime = ktime_get();
 
+	pr_info("checkpoint: %s: start\n", __func__);
 	might_sleep();
 
 	mutex_lock(&dpm_list_mtx);
@@ -734,7 +739,7 @@ void dpm_resume(pm_message_t state)
 	}
 	mutex_unlock(&dpm_list_mtx);
 	async_synchronize_full();
-	dpm_show_time(starttime, state, NULL);
+	dpm_show_time(starttime, state, "checkpoint:");
 }
 
 /**
@@ -1198,6 +1203,7 @@ int dpm_suspend(pm_message_t state)
 	ktime_t starttime = ktime_get();
 	int error = 0;
 
+	pr_info("checkpoint: %s: start\n", __func__);
 	might_sleep();
 
 	mutex_lock(&dpm_list_mtx);
@@ -1232,7 +1238,7 @@ int dpm_suspend(pm_message_t state)
 		suspend_stats.failed_suspend++;
 		dpm_save_failed_step(SUSPEND_SUSPEND);
 	} else
-		dpm_show_time(starttime, state, NULL);
+		dpm_show_time(starttime, state, "checkpoint:");
 	return error;
 }
 

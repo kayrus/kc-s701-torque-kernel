@@ -222,7 +222,8 @@ config VECTORS_BASE
 	default DRAM_BASE if REMAP_VECTORS_TO_RAM
 	default 0x00000000
 	help
-	  The base address of exception vectors.
+	  The base address of exception vectors.  This must be two pages
+	  in size.
 
 config ARM_PATCH_PHYS_VIRT
 	bool "Patch physical to virtual translations at runtime" if EMBEDDED
@@ -289,6 +290,14 @@ config ARM_USER_ACCESSIBLE_TIMER_BASE
 	 Specify the base user-space virtual address where the user-accessible
 	 timer counter page should be mapped by the kernel.  User-space apps
 	 will read directly from the page at this address.
+
+config ARCH_RANDOM
+	bool "SOC specific random number generation"
+	help
+	 Allow the kernel to use an architecture specific implementation for
+	 random number generation
+
+	 If unsure, say N
 
 source "init/Kconfig"
 
@@ -1070,116 +1079,7 @@ endchoice
 # Kconfigs may be included either alphabetically (according to the
 # plat- suffix) or along side the corresponding mach-* source.
 #
-source "arch/arm/mach-at91/Kconfig"
-
-source "arch/arm/mach-bcmring/Kconfig"
-
-source "arch/arm/mach-clps711x/Kconfig"
-
-source "arch/arm/mach-cns3xxx/Kconfig"
-
-source "arch/arm/mach-davinci/Kconfig"
-
-source "arch/arm/mach-dove/Kconfig"
-
-source "arch/arm/mach-ep93xx/Kconfig"
-
-source "arch/arm/mach-footbridge/Kconfig"
-
-source "arch/arm/mach-gemini/Kconfig"
-
-source "arch/arm/mach-h720x/Kconfig"
-
-source "arch/arm/mach-integrator/Kconfig"
-
-source "arch/arm/mach-iop32x/Kconfig"
-
-source "arch/arm/mach-iop33x/Kconfig"
-
-source "arch/arm/mach-iop13xx/Kconfig"
-
-source "arch/arm/mach-ixp4xx/Kconfig"
-
-source "arch/arm/mach-ixp2000/Kconfig"
-
-source "arch/arm/mach-ixp23xx/Kconfig"
-
-source "arch/arm/mach-kirkwood/Kconfig"
-
-source "arch/arm/mach-ks8695/Kconfig"
-
-source "arch/arm/mach-lpc32xx/Kconfig"
-
 source "arch/arm/mach-msm/Kconfig"
-
-source "arch/arm/mach-mv78xx0/Kconfig"
-
-source "arch/arm/plat-mxc/Kconfig"
-
-source "arch/arm/mach-mxs/Kconfig"
-
-source "arch/arm/mach-netx/Kconfig"
-
-source "arch/arm/mach-nomadik/Kconfig"
-source "arch/arm/plat-nomadik/Kconfig"
-
-source "arch/arm/plat-omap/Kconfig"
-
-source "arch/arm/mach-omap1/Kconfig"
-
-source "arch/arm/mach-omap2/Kconfig"
-
-source "arch/arm/mach-orion5x/Kconfig"
-
-source "arch/arm/mach-pxa/Kconfig"
-source "arch/arm/plat-pxa/Kconfig"
-
-source "arch/arm/mach-mmp/Kconfig"
-
-source "arch/arm/mach-realview/Kconfig"
-
-source "arch/arm/mach-sa1100/Kconfig"
-
-source "arch/arm/plat-samsung/Kconfig"
-source "arch/arm/plat-s3c24xx/Kconfig"
-source "arch/arm/plat-s5p/Kconfig"
-
-source "arch/arm/plat-spear/Kconfig"
-
-source "arch/arm/mach-s3c24xx/Kconfig"
-if ARCH_S3C24XX
-source "arch/arm/mach-s3c2412/Kconfig"
-source "arch/arm/mach-s3c2440/Kconfig"
-endif
-
-if ARCH_S3C64XX
-source "arch/arm/mach-s3c64xx/Kconfig"
-endif
-
-source "arch/arm/mach-s5p64x0/Kconfig"
-
-source "arch/arm/mach-s5pc100/Kconfig"
-
-source "arch/arm/mach-s5pv210/Kconfig"
-
-source "arch/arm/mach-exynos/Kconfig"
-
-source "arch/arm/mach-shmobile/Kconfig"
-
-source "arch/arm/mach-tegra/Kconfig"
-
-source "arch/arm/mach-u300/Kconfig"
-
-source "arch/arm/mach-ux500/Kconfig"
-
-source "arch/arm/mach-versatile/Kconfig"
-
-source "arch/arm/mach-vexpress/Kconfig"
-source "arch/arm/plat-versatile/Kconfig"
-
-source "arch/arm/mach-vt8500/Kconfig"
-
-source "arch/arm/mach-w90x900/Kconfig"
 
 # Definitions to make life easier
 config ARCH_ACORN
@@ -1844,8 +1744,36 @@ config ARCH_MEMORY_REMOVE
 config ENABLE_DMM
 	def_bool n
 
+choice
+	prompt "Virtual Memory Reclaim"
+	default NO_VM_RECLAIM
+	help
+	  Select the method of reclaiming virtual memory
+
 config DONT_MAP_HOLE_AFTER_MEMBANK0
-	def_bool n
+	bool "Map around the largest hole"
+	help
+	  Do not map the memory belonging to the largest hole
+	  into the virtual space. This results in more lowmem.
+	  If multiple holes are present, only the largest hole
+	  in the first 256MB of memory is not mapped.
+
+config ENABLE_VMALLOC_SAVING
+	bool "Reclaim memory for each subsystem"
+	help
+	  Enable this config to reclaim the virtual space belonging
+	  to any subsystem which is expected to have a lifetime of
+	  the entire system. This feature allows lowmem to be non-
+	  contiguous.
+
+config NO_VM_RECLAIM
+	bool "Do not reclaim memory"
+	help
+	  Do not reclaim any memory. This might result in less lowmem
+	  and wasting virtual memory space which could otherwise be
+	  reclaimed by using any of the other two config options.
+
+endchoice
 
 config HOLES_IN_ZONE
 	def_bool n

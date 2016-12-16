@@ -14,6 +14,16 @@
  * GNU General Public License for more details.
  *
  */
+
+/*
+ * This software is contributed or developed by KYOCERA Corporation.
+ * (C) 2011 KYOCERA Corporation
+ * (C) 2012 KYOCERA Corporation
+ * (C) 2013 KYOCERA Corporation
+ * (C) 2014 KYOCERA Corporation
+ * (C) 2015 KYOCERA Corporation
+ */
+
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -26,9 +36,124 @@
 #include <linux/usb/gadget.h>
 #include <linux/workqueue.h>
 #include <linux/debugfs.h>
+#include <linux/usb/cdc.h>
 
 static DEFINE_SPINLOCK(ch_lock);
 static LIST_HEAD(usb_diag_ch_list);
+
+#if 1
+static struct usb_interface_descriptor intf_desc = {
+	.bLength =		USB_DT_INTERFACE_SIZE,
+	.bDescriptorType =	USB_DT_INTERFACE,
+	.bNumEndpoints =	2,
+	.bInterfaceClass =	0x02,
+	.bInterfaceSubClass =	0x0A,
+	.bInterfaceProtocol =	0x01,
+	.iInterface =		0x0,
+};
+
+static struct usb_cdc_header_desc diag_header_desc = {
+	.bLength            =	sizeof(struct usb_cdc_header_desc),
+	.bDescriptorType    =	0x24,
+	.bDescriptorSubType =	0x00,
+	.bcdCDC             =	__constant_cpu_to_le16(0x0110),
+};
+
+static struct usb_cdc_mdlm_desc mdlm_desc = {
+	.bLength = sizeof(struct usb_cdc_mdlm_desc),
+	.bDescriptorType = 0x24,
+	.bDescriptorSubType = 0x12,
+	.bcdVersion = __constant_cpu_to_le16(0x0100),
+	.bGUID[0] = 0xC2,
+	.bGUID[1] = 0x29,
+	.bGUID[2] = 0x9F,
+	.bGUID[3] = 0xCC,
+	.bGUID[4] = 0xD4,
+	.bGUID[5] = 0x89,
+	.bGUID[6] = 0x40,
+	.bGUID[7] = 0x66,
+	.bGUID[8] = 0x89,
+	.bGUID[9] = 0x2B,
+	.bGUID[10] = 0x10,
+	.bGUID[11] = 0xC3,
+	.bGUID[12] = 0x41,
+	.bGUID[13] = 0xDD,
+	.bGUID[14] = 0x98,
+	.bGUID[15] = 0xA9,
+};
+
+static struct usb_endpoint_descriptor hs_bulk_in_desc = {
+	.bLength =		USB_DT_ENDPOINT_SIZE,
+	.bDescriptorType =	USB_DT_ENDPOINT,
+	.bEndpointAddress =	USB_DIR_IN,
+	.bmAttributes =		USB_ENDPOINT_XFER_BULK,
+	.wMaxPacketSize =	__constant_cpu_to_le16(512),
+	.bInterval 		= 0,
+};
+
+static struct usb_endpoint_descriptor fs_bulk_in_desc  = {
+	.bLength =		USB_DT_ENDPOINT_SIZE,
+	.bDescriptorType =	USB_DT_ENDPOINT,
+	.bEndpointAddress =	USB_DIR_IN,
+	.bmAttributes =		USB_ENDPOINT_XFER_BULK,
+	.wMaxPacketSize = 	__constant_cpu_to_le16(64),
+	.bInterval 		= 0,
+};
+
+static struct usb_endpoint_descriptor hs_bulk_out_desc = {
+	.bLength =		USB_DT_ENDPOINT_SIZE,
+	.bDescriptorType =	USB_DT_ENDPOINT,
+	.bEndpointAddress =	USB_DIR_OUT,
+	.bmAttributes =		USB_ENDPOINT_XFER_BULK,
+	.wMaxPacketSize =	__constant_cpu_to_le16(512),
+	.bInterval 		= 0,
+};
+
+static struct usb_endpoint_descriptor fs_bulk_out_desc = {
+	.bLength =		USB_DT_ENDPOINT_SIZE,
+	.bDescriptorType =	USB_DT_ENDPOINT,
+	.bEndpointAddress =	USB_DIR_OUT,
+	.bmAttributes =		USB_ENDPOINT_XFER_BULK,
+	.wMaxPacketSize =	__constant_cpu_to_le16(64),
+	.bInterval 		= 0,
+};
+
+static struct usb_descriptor_header *fs_diag_desc[] = {
+	(struct usb_descriptor_header *) &intf_desc,
+	(struct usb_descriptor_header *) &diag_header_desc,
+	(struct usb_descriptor_header *) &mdlm_desc,
+	(struct usb_descriptor_header *) &fs_bulk_in_desc,
+	(struct usb_descriptor_header *) &fs_bulk_out_desc,
+	NULL,
+};
+
+static struct usb_descriptor_header *hs_diag_desc[] = {
+	(struct usb_descriptor_header *) &intf_desc,
+	(struct usb_descriptor_header *) &diag_header_desc,
+	(struct usb_descriptor_header *) &mdlm_desc,
+	(struct usb_descriptor_header *) &hs_bulk_in_desc,
+	(struct usb_descriptor_header *) &hs_bulk_out_desc,
+	NULL,
+};
+
+static const char cdc_interface[] = "KC-S701 High Speed Serial Port";
+
+static struct usb_string cdc_interface_string[] = {
+	{0, cdc_interface},
+	{}
+};
+
+static struct usb_gadget_strings cdc_interface_string_table = {
+	.language =		0x0409,
+	.strings =		cdc_interface_string,
+};
+
+static struct usb_gadget_strings *cdc_if_strings[] = {
+	&cdc_interface_string_table,
+	NULL,
+};
+
+#else
 
 static struct usb_interface_descriptor intf_desc = {
 	.bLength            =	sizeof intf_desc,
@@ -129,6 +254,8 @@ static struct usb_descriptor_header *ss_diag_desc[] = {
 	(struct usb_descriptor_header *) &ss_bulk_out_comp_desc,
 	NULL,
 };
+
+#endif
 
 /**
  * struct diag_context - USB diag function driver private structure
@@ -629,7 +756,8 @@ static void diag_function_unbind(struct usb_configuration *c,
 	unsigned long flags;
 
 	if (gadget_is_superspeed(c->cdev->gadget))
-		usb_free_descriptors(f->ss_descriptors);
+		if (f->ss_descriptors)
+			usb_free_descriptors(f->ss_descriptors);
 	if (gadget_is_dualspeed(c->cdev->gadget))
 		usb_free_descriptors(f->hs_descriptors);
 
@@ -689,7 +817,7 @@ static int diag_function_bind(struct usb_configuration *c,
 		if (!f->hs_descriptors)
 			goto fail;
 	}
-
+#if 0
 	if (gadget_is_superspeed(c->cdev->gadget)) {
 		ss_bulk_in_desc.bEndpointAddress =
 				fs_bulk_in_desc.bEndpointAddress;
@@ -701,6 +829,7 @@ static int diag_function_bind(struct usb_configuration *c,
 		if (!f->ss_descriptors)
 			goto fail;
 	}
+#endif
 	diag_update_pid_and_serial_num(ctxt);
 	return 0;
 fail:
@@ -724,6 +853,7 @@ int diag_function_add(struct usb_configuration *c, const char *name,
 	struct diag_context *dev;
 	struct usb_diag_ch *_ch;
 	int found = 0, ret;
+	int rc;
 
 	DBG(c->cdev, "diag_function_add\n");
 
@@ -755,6 +885,7 @@ int diag_function_add(struct usb_configuration *c, const char *name,
 	dev->update_pid_and_serial_num = update_pid;
 	dev->cdev = c->cdev;
 	dev->function.name = _ch->name;
+	dev->function.strings = cdc_if_strings;
 	dev->function.descriptors = fs_diag_desc;
 	dev->function.hs_descriptors = hs_diag_desc;
 	dev->function.bind = diag_function_bind;
@@ -764,6 +895,14 @@ int diag_function_add(struct usb_configuration *c, const char *name,
 	spin_lock_init(&dev->lock);
 	INIT_LIST_HEAD(&dev->read_pool);
 	INIT_LIST_HEAD(&dev->write_pool);
+
+	if (cdc_interface_string[0].id == 0) {
+		rc = usb_string_id(c->cdev);
+		if (unlikely(rc < 0))
+			return -ENODEV;
+		cdc_interface_string[0].id = rc;
+		intf_desc.iInterface = rc;
+	}
 
 	ret = usb_add_function(c, &dev->function);
 	if (ret) {
@@ -837,17 +976,28 @@ static const struct file_operations debug_fdiag_ops = {
 struct dentry *dent_diag;
 static void fdiag_debugfs_init(void)
 {
+	struct dentry *dent_diag_status;
 	dent_diag = debugfs_create_dir("usb_diag", 0);
-	if (IS_ERR(dent_diag))
+	if (!dent_diag || IS_ERR(dent_diag))
 		return;
 
-	debugfs_create_file("status", 0444, dent_diag, 0, &debug_fdiag_ops);
+	dent_diag_status = debugfs_create_file("status", 0444, dent_diag, 0,
+			&debug_fdiag_ops);
+
+	if (!dent_diag_status || IS_ERR(dent_diag_status)) {
+		debugfs_remove(dent_diag);
+		dent_diag = NULL;
+		return;
+	}
+}
+
+static void fdiag_debugfs_remove(void)
+{
+	debugfs_remove_recursive(dent_diag);
 }
 #else
-static void fdiag_debugfs_init(void)
-{
-	return;
-}
+static inline void fdiag_debugfs_init(void) {}
+static inline void fdiag_debugfs_remove(void) {}
 #endif
 
 static void diag_cleanup(void)
@@ -856,7 +1006,7 @@ static void diag_cleanup(void)
 	struct usb_diag_ch *_ch;
 	unsigned long flags;
 
-	debugfs_remove_recursive(dent_diag);
+	fdiag_debugfs_remove();
 
 	list_for_each_safe(act, tmp, &usb_diag_ch_list) {
 		_ch = list_entry(act, struct usb_diag_ch, list);

@@ -655,7 +655,7 @@ static unsigned int *build_gmem2sys_cmds(struct adreno_device *adreno_dev,
 	unsigned int addr = shadow->gmemshadow.gpuaddr;
 	unsigned int offset = (addr - (addr & 0xfffff000)) / bytesperpixel;
 
-	if (!(drawctxt->flags & CTXT_FLAGS_PREAMBLE)) {
+	if (!(drawctxt->base.flags & KGSL_CONTEXT_PREAMBLE)) {
 		/* Store TP0_CHICKEN register */
 		*cmds++ = cp_type3_packet(CP_REG_TO_MEM, 2);
 		*cmds++ = REG_TP0_CHICKEN;
@@ -864,7 +864,7 @@ static unsigned int *build_sys2gmem_cmds(struct adreno_device *adreno_dev,
 	unsigned int *cmds = shadow->gmem_restore_commands;
 	unsigned int *start = cmds;
 
-	if (!(drawctxt->flags & CTXT_FLAGS_PREAMBLE)) {
+	if (!(drawctxt->base.flags & KGSL_CONTEXT_PREAMBLE)) {
 		/* Store TP0_CHICKEN register */
 		*cmds++ = cp_type3_packet(CP_REG_TO_MEM, 2);
 		*cmds++ = REG_TP0_CHICKEN;
@@ -1334,8 +1334,6 @@ build_shader_save_restore_cmds(struct adreno_device *adreno_dev,
 static int a2xx_create_gpustate_shadow(struct adreno_device *adreno_dev,
 			struct adreno_context *drawctxt)
 {
-	drawctxt->flags |= CTXT_FLAGS_STATE_SHADOW;
-
 	/* build indirect command buffers to save & restore regs/constants */
 	build_regrestore_cmds(adreno_dev, drawctxt);
 	build_regsave_cmds(adreno_dev, drawctxt);
@@ -1361,9 +1359,6 @@ static int a2xx_create_gmem_shadow(struct adreno_device *adreno_dev,
 	if (result)
 		return result;
 
-	/* set the gmem shadow flag for the context */
-	drawctxt->flags |= CTXT_FLAGS_GMEM_SHADOW;
-
 	/* blank out gmem shadow. */
 	kgsl_sharedmem_set(drawctxt->base.device,
 			&drawctxt->context_gmem_shadow.gmemshadow, 0, 0,
@@ -1374,7 +1369,7 @@ static int a2xx_create_gmem_shadow(struct adreno_device *adreno_dev,
 		&tmp_ctx.cmd);
 
 	/* build TP0_CHICKEN register restore command buffer */
-	if (!(drawctxt->flags & CTXT_FLAGS_PREAMBLE))
+	if (!(drawctxt->base.flags & KGSL_CONTEXT_PREAMBLE))
 		tmp_ctx.cmd = build_chicken_restore_cmds(drawctxt);
 
 	/* build indirect command buffers to save & restore gmem */
@@ -1398,10 +1393,55 @@ static int a2xx_create_gmem_shadow(struct adreno_device *adreno_dev,
 	return 0;
 }
 
+static void a2xx_drawctxt_detach(struct adreno_context *drawctxt)
+{
+	kgsl_sharedmem_free(&drawctxt->gpustate);
+	kgsl_sharedmem_free(&drawctxt->context_gmem_shadow.gmemshadow);
+}
+
+static int a2xx_drawctxt_save(struct adreno_device *adreno_dev,
+			struct adreno_context *context);
+
+static int a2xx_drawctxt_restore(struct adreno_device *adreno_dev,
+			struct adreno_context *context);
+
+static int a2xx_drawctxt_draw_workaround(struct adreno_device *adreno_dev,
+					struct adreno_context *context);
+
+static const struct adreno_context_ops a225_preamble_ctx_ops = {
+	.restore = adreno_context_restore,
+	.draw_workaround = a2xx_drawctxt_draw_workaround,
+};
+
+static const struct adreno_context_ops a225_legacy_ctx_ops = {
+	.save = a2xx_drawctxt_save,
+	.restore = a2xx_drawctxt_restore,
+	.draw_workaround = a2xx_drawctxt_draw_workaround,
+	.detach = a2xx_drawctxt_detach,
+};
+
+static const struct adreno_context_ops a2xx_legacy_ctx_ops = {
+	.save = a2xx_drawctxt_save,
+	.restore = a2xx_drawctxt_restore,
+	.detach = a2xx_drawctxt_detach,
+};
+
+
 static int a2xx_drawctxt_create(struct adreno_device *adreno_dev,
 	struct adreno_context *drawctxt)
 {
 	int ret;
+
+	if (drawctxt->base.flags & KGSL_CONTEXT_PREAMBLE
+	   && drawctxt->base.flags & KGSL_CONTEXT_NO_GMEM_ALLOC) {
+		drawctxt->ops = (adreno_is_a225(adreno_dev))
+			?  &a225_preamble_ctx_ops : &adreno_preamble_ctx_ops;
+
+		return 0;
+	}
+
+	drawctxt->ops = (adreno_is_a225(adreno_dev))
+			?  &a225_legacy_ctx_ops : &a2xx_legacy_ctx_ops;
 
 	/*
 	 * Allocate memory for the GPU state and the context commands.
@@ -1422,15 +1462,14 @@ static int a2xx_drawctxt_create(struct adreno_device *adreno_dev,
 	tmp_ctx.cmd = tmp_ctx.start
 	    = (unsigned int *)((char *)drawctxt->gpustate.hostptr + CMD_OFFSET);
 
-	if (!(drawctxt->flags & CTXT_FLAGS_PREAMBLE)) {
+	if (!(drawctxt->base.flags & KGSL_CONTEXT_PREAMBLE)) {
 		ret = a2xx_create_gpustate_shadow(adreno_dev, drawctxt);
 		if (ret)
 			goto done;
 
-		drawctxt->flags |= CTXT_FLAGS_SHADER_SAVE;
 	}
 
-	if (!(drawctxt->flags & CTXT_FLAGS_NOGMEMALLOC)) {
+	if (!(drawctxt->base.flags & KGSL_CONTEXT_NO_GMEM_ALLOC)) {
 		ret = a2xx_create_gmem_shadow(adreno_dev, drawctxt);
 		if (ret)
 			goto done;
@@ -1510,13 +1549,7 @@ static int a2xx_drawctxt_save(struct adreno_device *adreno_dev,
 	struct kgsl_device *device = &adreno_dev->dev;
 	int ret;
 
-	if (context == NULL || (context->flags & CTXT_FLAGS_BEING_DESTROYED))
-		return 0;
-
-	if (context->state == ADRENO_CONTEXT_STATE_INVALID)
-		return 0;
-
-	if (!(context->flags & CTXT_FLAGS_PREAMBLE)) {
+	if (!(context->base.flags & KGSL_CONTEXT_PREAMBLE)) {
 		kgsl_cffdump_syncmem(context->base.device, &context->gpustate,
 			context->reg_save[1],
 			context->reg_save[2] << 2, true);
@@ -1528,7 +1561,7 @@ static int a2xx_drawctxt_save(struct adreno_device *adreno_dev,
 		if (ret)
 			return ret;
 
-		if (context->flags & CTXT_FLAGS_SHADER_SAVE) {
+		if (test_bit(ADRENO_CONTEXT_SHADER_SAVE, &context->priv)) {
 			kgsl_cffdump_syncmem(context->base.device,
 				&context->gpustate,
 				context->shader_save[1],
@@ -1555,12 +1588,11 @@ static int a2xx_drawctxt_save(struct adreno_device *adreno_dev,
 			if (ret)
 				return ret;
 
-			context->flags |= CTXT_FLAGS_SHADER_RESTORE;
+			set_bit(ADRENO_CONTEXT_SHADER_RESTORE, &context->priv);
 		}
 	}
 
-	if ((context->flags & CTXT_FLAGS_GMEM_SAVE) &&
-	    (context->flags & CTXT_FLAGS_GMEM_SHADOW)) {
+	if (test_bit(ADRENO_CONTEXT_GMEM_SAVE, &context->priv)) {
 		kgsl_cffdump_syncmem(context->base.device, &context->gpustate,
 			context->context_gmem_shadow.gmem_save[1],
 			context->context_gmem_shadow.gmem_save[2] << 2, true);
@@ -1579,7 +1611,7 @@ static int a2xx_drawctxt_save(struct adreno_device *adreno_dev,
 			context->chicken_restore[2] << 2, true);
 
 		/* Restore TP0_CHICKEN */
-		if (!(context->flags & CTXT_FLAGS_PREAMBLE)) {
+		if (!(context->base.flags & KGSL_CONTEXT_PREAMBLE)) {
 			ret = adreno_ringbuffer_issuecmds(device, context,
 				KGSL_CMD_FLAGS_NONE,
 				context->chicken_restore, 3);
@@ -1589,7 +1621,7 @@ static int a2xx_drawctxt_save(struct adreno_device *adreno_dev,
 		}
 		adreno_dev->gpudev->ctx_switches_since_last_draw = 0;
 
-		context->flags |= CTXT_FLAGS_GMEM_RESTORE;
+		set_bit(ADRENO_CONTEXT_GMEM_RESTORE, &context->priv);
 	} else if (adreno_is_a2xx(adreno_dev))
 		return a2xx_drawctxt_draw_workaround(adreno_dev, context);
 
@@ -1600,43 +1632,17 @@ static int a2xx_drawctxt_restore(struct adreno_device *adreno_dev,
 			struct adreno_context *context)
 {
 	struct kgsl_device *device = &adreno_dev->dev;
-	unsigned int cmds[5];
-	int ret = 0;
+	int ret;
 
-	if (context == NULL) {
-		/* No context - set the default pagetable and thats it */
-		unsigned int id;
-		/*
-		 * If there isn't a current context, the kgsl_mmu_setstate
-		 * will use the CPU path so we don't need to give
-		 * it a valid context id.
-		 */
-		id = (adreno_dev->drawctxt_active != NULL)
-			? adreno_dev->drawctxt_active->base.id
-			: KGSL_CONTEXT_INVALID;
-		kgsl_mmu_setstate(&device->mmu, device->mmu.defaultpagetable,
-				  id);
-		return 0;
-	}
-
-	cmds[0] = cp_nop_packet(1);
-	cmds[1] = KGSL_CONTEXT_TO_MEM_IDENTIFIER;
-	cmds[2] = cp_type3_packet(CP_MEM_WRITE, 2);
-	cmds[3] = device->memstore.gpuaddr +
-		KGSL_MEMSTORE_OFFSET(KGSL_MEMSTORE_GLOBAL, current_context);
-	cmds[4] = context->base.id;
-	ret = adreno_ringbuffer_issuecmds(device, context, KGSL_CMD_FLAGS_NONE,
-					cmds, 5);
+	ret = adreno_context_restore(adreno_dev, context);
 	if (ret)
 		return ret;
 
-	kgsl_mmu_setstate(&device->mmu, context->base.proc_priv->pagetable,
-			context->base.id);
-
-	/* restore gmem.
+	/*
+	 *  restore gmem.
 	 *  (note: changes shader. shader must not already be restored.)
 	 */
-	if (context->flags & CTXT_FLAGS_GMEM_RESTORE) {
+	if (test_bit(ADRENO_CONTEXT_GMEM_RESTORE, &context->priv)) {
 		kgsl_cffdump_syncmem(context->base.device, &context->gpustate,
 			context->context_gmem_shadow.gmem_restore[1],
 			context->context_gmem_shadow.gmem_restore[2] << 2,
@@ -1648,7 +1654,7 @@ static int a2xx_drawctxt_restore(struct adreno_device *adreno_dev,
 		if (ret)
 			return ret;
 
-		if (!(context->flags & CTXT_FLAGS_PREAMBLE)) {
+		if (!(context->base.flags & KGSL_CONTEXT_PREAMBLE)) {
 			kgsl_cffdump_syncmem(context->base.device,
 				&context->gpustate,
 				context->chicken_restore[1],
@@ -1661,11 +1667,10 @@ static int a2xx_drawctxt_restore(struct adreno_device *adreno_dev,
 			if (ret)
 				return ret;
 		}
-
-		context->flags &= ~CTXT_FLAGS_GMEM_RESTORE;
+		clear_bit(ADRENO_CONTEXT_GMEM_RESTORE, &context->priv);
 	}
 
-	if (!(context->flags & CTXT_FLAGS_PREAMBLE)) {
+	if (!(context->base.flags & KGSL_CONTEXT_PREAMBLE)) {
 		kgsl_cffdump_syncmem(context->base.device, &context->gpustate,
 			context->reg_restore[1],
 			context->reg_restore[2] << 2, true);
@@ -1677,7 +1682,7 @@ static int a2xx_drawctxt_restore(struct adreno_device *adreno_dev,
 			return ret;
 
 		/* restore shader instructions & partitioning. */
-		if (context->flags & CTXT_FLAGS_SHADER_RESTORE) {
+		if (test_bit(ADRENO_CONTEXT_SHADER_RESTORE, &context->priv)) {
 			kgsl_cffdump_syncmem(context->base.device,
 				&context->gpustate,
 				context->shader_restore[1],
@@ -1692,6 +1697,7 @@ static int a2xx_drawctxt_restore(struct adreno_device *adreno_dev,
 	}
 
 	if (adreno_is_a20x(adreno_dev)) {
+		unsigned int cmds[2];
 		cmds[0] = cp_type3_packet(CP_SET_BIN_BASE_OFFSET, 1);
 		cmds[1] = context->bin_base_offset;
 		ret = adreno_ringbuffer_issuecmds(device, context,
@@ -1965,17 +1971,19 @@ static int a2xx_rb_init(struct adreno_device *adreno_dev,
 	return 0;
 }
 
-static unsigned int a2xx_busy_cycles(struct adreno_device *adreno_dev)
+static void a2xx_busy_cycles(struct adreno_device *adreno_dev,
+				struct adreno_busy_data *data)
 {
 	struct kgsl_device *device = &adreno_dev->dev;
-	unsigned int reg, val;
+	unsigned int reg;
 
+	memset(data, 0, sizeof(*data));
 	/* Freeze the counter */
 	kgsl_regwrite(device, REG_CP_PERFMON_CNTL,
 		REG_PERF_MODE_CNT | REG_PERF_STATE_FREEZE);
 
 	/* Get the value */
-	kgsl_regread(device, REG_RBBM_PERFCOUNTER1_LO, &val);
+	kgsl_regread(device, REG_RBBM_PERFCOUNTER1_LO, &data->gpu_busy);
 
 	/* Reset the counter */
 	kgsl_regwrite(device, REG_CP_PERFMON_CNTL,
@@ -1988,7 +1996,6 @@ static unsigned int a2xx_busy_cycles(struct adreno_device *adreno_dev)
 	kgsl_regwrite(device, REG_CP_PERFMON_CNTL,
 		REG_PERF_MODE_CNT | REG_PERF_STATE_ENABLE);
 
-	return val;
 }
 
 static void a2xx_gmeminit(struct adreno_device *adreno_dev)
@@ -2082,6 +2089,8 @@ static void a2xx_start(struct adreno_device *adreno_dev)
 	kgsl_regwrite(device, REG_SQ_INT_CNTL, 0);
 
 	a2xx_gmeminit(adreno_dev);
+
+	kgsl_regwrite(device, REG_CP_DEBUG, A2XX_CP_DEBUG_DEFAULT);
 }
 
 static void a2xx_postmortem_dump(struct adreno_device *adreno_dev)
@@ -2269,7 +2278,6 @@ static unsigned int a2xx_register_offsets[ADRENO_REG_REGISTER_MAX] = {
 	ADRENO_REG_DEFINE(ADRENO_REG_CP_IB2_BASE, REG_CP_IB2_BASE),
 	ADRENO_REG_DEFINE(ADRENO_REG_CP_IB2_BUFSZ, REG_CP_IB2_BUFSZ),
 	ADRENO_REG_DEFINE(ADRENO_REG_CP_TIMESTAMP, REG_CP_TIMESTAMP),
-	ADRENO_REG_DEFINE(ADRENO_REG_CP_ME_RAM_RADDR, REG_CP_ME_RAM_RADDR),
 	ADRENO_REG_DEFINE(ADRENO_REG_SCRATCH_ADDR, REG_SCRATCH_ADDR),
 	ADRENO_REG_DEFINE(ADRENO_REG_SCRATCH_UMSK, REG_SCRATCH_UMSK),
 	ADRENO_REG_DEFINE(ADRENO_REG_RBBM_STATUS, REG_RBBM_STATUS),
@@ -2283,7 +2291,7 @@ static unsigned int a2xx_register_offsets[ADRENO_REG_REGISTER_MAX] = {
 	ADRENO_REG_DEFINE(ADRENO_REG_TP0_CHICKEN, REG_TP0_CHICKEN),
 };
 
-const struct adreno_reg_offsets a2xx_reg_offsets = {
+struct adreno_reg_offsets a2xx_reg_offsets = {
 	.offsets = a2xx_register_offsets,
 	.offset_0 = ADRENO_REG_REGISTER_MAX,
 };
@@ -2296,9 +2304,6 @@ struct adreno_gpudev adreno_a2xx_gpudev = {
 	.reg_offsets = &a2xx_reg_offsets,
 
 	.ctxt_create = a2xx_drawctxt_create,
-	.ctxt_save = a2xx_drawctxt_save,
-	.ctxt_restore = a2xx_drawctxt_restore,
-	.ctxt_draw_workaround = a2xx_drawctxt_draw_workaround,
 	.irq_handler = a2xx_irq_handler,
 	.irq_control = a2xx_irq_control,
 	.irq_pending = a2xx_irq_pending,
