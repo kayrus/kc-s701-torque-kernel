@@ -51,6 +51,14 @@ cd include
 ln -s asm-generic asm
 ```
 
+### `undefined reference to`
+
+Most probably you've selected invalid defconfig. Make sure you use the correct one.
+
+### `warning: argument to 'sizeof' in 'memcpy' call is the same expression`
+
+Edit `Makefile` and add `-Wno-sizeof-pointer-memaccess` into the `HOSTCFLAGS` variable.
+
 ### Extract module symver
 
 https://github.com/glandium/extract-symvers
